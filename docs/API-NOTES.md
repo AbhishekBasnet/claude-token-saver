@@ -127,3 +127,13 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 ## 8. Decisions (user, 2026-11-18)
 - Architecture: **hybrid**. Python stdlib does all logic; a thin TypeScript shim handles the four mod-only features.
 - Input Router: **skip PDFs** (no `pdftotext` dependency).
+
+## 9. Verified in step 0 (2026-11-18)
+- A plugin's `hooks/hooks.json` can hold classic `hooks` and `modules` together. `claude plugin validate` passes.
+- Installed at user scope from the folder marketplace. `claude plugin list` shows `Read from: <repo>/plugins/token-saver`, so edits plus `/reload-plugins` take effect without reinstalling.
+- In a fresh session from another folder: the classic `SessionStart` hook fired and its `systemMessage` came back as `hook_response`, and the shim ran Python via `$.process.run`.
+- `claude -p --model haiku --tools "" …` takes **~2.0–2.4 s** wall time (API ~0.8 s). The overhead is 878 input tokens, and they get cached.
+- Prompt cache: usage reports `ephemeral_1h_input_tokens`, and the transcript has `cacheControl … ttl: 1h` and `promptCacheRequested: 1h`, so the **1-hour TTL is confirmed** on this subscription.
+- ⚠️ In a `claude -p` session the sub-agent tool is listed as **`Task`**. In this interactive session it's **`Agent`**. The sub-agent router must match `Agent|Task`.
+- The transcript's assistant entries carry `message.usage` (real context size) and an `effort` field (`medium` here), which the Effort Optimizer can read.
+- Self-test engine and fixtures live in `plugins/token-saver/selftest/` (not `tests/fixtures/`), so Doctor can run them from an installed copy. `tests/run_selftest.py` wraps it for CI.

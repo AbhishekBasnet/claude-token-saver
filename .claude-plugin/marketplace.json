@@ -1,0 +1,11 @@
+{
+  "name": "token-saver",
+  "owner": { "name": "token-saver" },
+  "plugins": [
+    {
+      "name": "token-saver",
+      "source": "./plugins/token-saver",
+      "description": "Claude Code mods that cut wasted tokens: input digests, sub-agent routing, handoffs, cache clock, effort hints, and a doctor."
+    }
+  ]
+}

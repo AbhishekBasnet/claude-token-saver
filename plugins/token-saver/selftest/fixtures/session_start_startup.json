@@ -1,0 +1,1 @@
+{"session_id": "fixture-session-1", "transcript_path": "/nonexistent/transcript.jsonl", "cwd": "/tmp/project", "hook_event_name": "SessionStart", "source": "startup", "model": "claude-opus-5-5"}
