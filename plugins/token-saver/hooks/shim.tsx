@@ -15,11 +15,11 @@ const NOTE = { plugin: 'token-saver', key: 'note' } as const
 // Tools a mod may act on; only these are checked for a card file.
 const CARD_TOOLS = /^(Read|Agent|Task|mcp__.+)$/
 
-type PyAnswer = { ok: boolean; text?: string; error?: string }
+type PyAnswer = { ok: boolean; text?: string; error?: string; context?: string | null }
 
-async function py($: EngineInterface, args: string[], timeoutMs = 15000): Promise<PyAnswer> {
+async function py($: EngineInterface, args: string[], timeoutMs = 15000, stdin?: string): Promise<PyAnswer> {
   try {
-    const r = await $.process.run(['python3', `${$.plugin.root}/lib/ts_cli.py`, ...args], { timeoutMs })
+    const r = await $.process.run(['python3', `${$.plugin.root}/lib/ts_cli.py`, ...args], { timeoutMs, stdin })
     return JSON.parse(r.stdout.trim() || '{}') as PyAnswer
   } catch (err) {
     return { ok: false, error: String(err).slice(0, 200) }
@@ -66,6 +66,11 @@ export const register: Register = on => {
           argumentHint: '[today|7d|all|session]',
           immediate: true,
         })
+        await $.command.register({
+          name: 'handoff',
+          description: 'token-saver: write a detailed handoff doc, then /clear to continue fresh',
+          argumentHint: '[load]',
+        })
         await py($, ['shim-loaded', (await $.session.version()).version], 5000)
       }
     } catch {
@@ -92,6 +97,34 @@ export const register: Register = on => {
     const r = await py($, ['savings', await $.session.id(), e.args])
     return { text: r.text ?? `token-saver: /savings failed: ${r.error ?? 'no answer'}`, isTextDisplayOnly: true }
   }).catch(() => ({ text: 'token-saver: /savings failed (see ~/.claude/token-saver/debug.log).', isTextDisplayOnly: true }))
+
+  // /handoff: the session's own model writes the doc in a fork (tool-less, read
+  // from the prompt cache), so the doc never enters the main conversation.
+  on('command.run', { command: 'handoff' }, async ($, e) => {
+    const sid = await $.session.id()
+    if (e.args.trim() === 'load') {
+      const r = await py($, ['handoff-load', sid])
+      return { text: r.text ?? 'Could not load the handoff.', context: r.context ? [r.context] : undefined, isTextDisplayOnly: true }
+    }
+    const p = await py($, ['handoff-prompt', sid])
+    if (!p.ok || !p.text) return { text: p.text ?? `handoff failed: ${p.error ?? 'no prompt'}`, isTextDisplayOnly: true }
+    $.ui.status('token-saver: writing handoff document...')
+    let fork
+    try {
+      fork = await $.model.fork({ prompt: p.text })
+    } finally {
+      $.ui.status(undefined)
+    }
+    if (!fork.isAnswered) {
+      const why = fork.reason === 'nothing-to-fork'
+        ? 'nothing to hand off yet: this needs at least one reply from Claude since this session started or was resumed. Send a message first, then run /handoff'
+        : `the model call failed (${fork.reason})`
+      return { text: `Handoff not written: ${why}.`, isTextDisplayOnly: true }
+    }
+    const usage = await $.session.usage()
+    const s = await py($, ['handoff-save', sid, String(usage.context.tokens ?? 0), JSON.stringify(fork.usage)], 15000, fork.text)
+    return { text: s.text ?? `handoff not saved: ${s.error ?? 'no answer'}`, isTextDisplayOnly: true }
+  }).catch(() => ({ text: 'Handoff failed (see ~/.claude/token-saver/debug.log). Nothing was changed.', isTextDisplayOnly: true }))
 
   // After a call a mod may act on, pick up the card file its hook wrote.
   on('tool.call', async ($, e, next) => {

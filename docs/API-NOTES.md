@@ -158,3 +158,13 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 - Circuit breaker: 3 errors in one session or 10 in 24 h disables the mod (`disabled_by: doctor`, `reason`). It shows **one** `systemMessage` from the failing hook (display only; the event still passes through unchanged) and never re-enables on its own.
 - Self-test nesting: a self-test started from inside a self-test runs only the foundation cases, which never call Doctor, so it can't recurse.
 - Not done live: a real third-party plugin conflict. Installing a dummy plugin into your setup would be invasive, so the self-test covers it with a fixture plugin (`selftest/fixtures/conflict_plugin`).
+
+## 13. Verified in step 3: Handoff (2026-11-18)
+- `/handoff` runs `$.model.fork` (tool-less, same model and system prompt, read from the main thread's prompt cache), and Python writes the reply to `handoffs/<project-slug>/<stamp>.md` and `LATEST.md`. The doc **never enters the main conversation**: the session's own `/handoff` turn used 0 tokens.
+- Live (Haiku test session, about 20k context): fork input was 20,032 cache-read plus 462 uncached, output 2,485, wall ~14 s. Every required section was filled with specifics.
+- `nothing-to-fork` also happens right after a resume or restart until Claude has replied once in that process. The message now says to send a message first.
+- Classic `SessionStart` **does** fire with `source: "clear"` after `/clear` (verified in a stream-json session). `additionalContext` injects the doc, and the fresh session answered questions about the old one correctly. `LATEST.md` is renamed to `loaded-<stamp>.md`.
+- `startup`: hooks can't ask a question, so a fresh (<24 h) handoff is offered with a notice, and `/handoff load` returns it as command `context` (the model reads it with the next prompt).
+- Project slug = cwd with every non-alphanumeric character turned into `-`, which matches Claude Code's own `~/.claude/projects/<slug>` naming.
+- **Token accounting:** the doc measured **~2,350 real tokens** (fresh-session context 22,381 vs baseline 20,034). The len/4 estimate gave 1,138, about 2x low for markdown with paths and code. The saving is logged as old context minus (baseline + doc), where the baseline is the session's first-reply context. That keeps the system prompt and tools from counting as saved.
+- The test-run entries were removed from the real `savings.jsonl`.

@@ -36,7 +36,7 @@ def run_case(c: Case) -> tuple[bool, str, int]:
         data = ""
         if c.fixture:
             with open(os.path.join(FIX, c.fixture), encoding="utf-8") as f:
-                data = f.read()
+                data = f.read().replace("{home}", home)
         t0 = time.time()
         argv = [sys.executable, os.path.join(PLUGIN, c.script)] + (c.args if c.args is not None else ["--dry-run"])
         p = subprocess.run(argv,

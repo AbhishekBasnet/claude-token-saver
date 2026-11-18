@@ -71,6 +71,6 @@ def run_script(home, script, fixture=None, args=None, env=None):
     data = ""
     if fixture:
         with open(os.path.join(plugin, "selftest", "fixtures", fixture), encoding="utf-8") as f:
-            data = f.read()
+            data = f.read().replace("{home}", home)
     return subprocess.run([sys.executable, os.path.join(plugin, script)] + (args if args is not None else ["--dry-run"]),
                           input=data, capture_output=True, text=True, timeout=60, env=e)

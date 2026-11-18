@@ -346,3 +346,142 @@ register(
     Case("doctor", "doctor itself fails -> session unaffected", DOCTOR, "session_start_startup.json",
          _doctor_crash_check, setup=_crash_setup, env={**EMPTY_CLAUDE, "TOKEN_SAVER_FAKE_VERSION": "2.1.327"}),
 )
+
+
+# ---------------------------------------------------------------- handoff
+import time as _time  # noqa: E402
+
+
+def _transcript(ctx_tokens, sidechain_ctx=None):
+    def setup(home):
+        rows = [
+            {"type": "user", "message": {"role": "user", "content": "hi"}, "origin": {"kind": "human"}},
+            {"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}],
+             "usage": {"input_tokens": 10, "cache_read_input_tokens": ctx_tokens - 2010, "cache_creation_input_tokens": 2000,
+                       "output_tokens": 50}}},
+        ]
+        if sidechain_ctx:
+            rows.append({"type": "assistant", "isSidechain": True, "message": {"role": "assistant", "content": [],
+                         "usage": {"input_tokens": sidechain_ctx, "output_tokens": 1}}})
+        with open(os.path.join(home, "transcript.jsonl"), "w") as f:
+            for r in rows:
+                f.write(_json.dumps(r) + "\n")
+    return setup
+
+
+def _warned(ctx_k):
+    def check(out, home, p):
+        msg = (out or {}).get("systemMessage", "")
+        if f"context at {ctx_k}k tokens" not in msg or "/handoff" not in msg:
+            return False, f"expected warning at {ctx_k}k, got {out}"
+        return True, ""
+    return check
+
+
+def _warn_repeat_setup(home):
+    _transcript(252_000)(home)
+    run_script(home, "hooks/handoff_stop.py", "stop_main.json")
+
+
+def _warn_step_setup(home):
+    _warn_repeat_setup(home)
+    _transcript(303_000)(home)
+
+
+def _latest_setup(age_s=0, project="/tmp/project-a"):
+    def setup(home):
+        import handoff
+        d = in_home(home, handoff.handoff_dir, project or os.getcwd())
+        os.makedirs(d, exist_ok=True)
+        lp = os.path.join(d, "LATEST.md")
+        with open(os.path.join(HERE, "fixtures", "handoff_doc.md")) as src, open(lp, "w") as f:
+            f.write(src.read())
+        if age_s:
+            t = _time.time() - age_s
+            os.utime(lp, (t, t))
+    return setup
+
+
+def _clear_loaded(out, home, p):
+    ctx = ((out or {}).get("hookSpecificOutput") or {}).get("additionalContext", "")
+    if not ctx.startswith("[Handoff] Continuing from previous session") or "KeyError: 'id'" not in ctx:
+        return False, f"handoff not injected: {str(out)[:200]}"
+    import handoff
+    d = in_home(home, handoff.handoff_dir, "/tmp/project-a")
+    files = os.listdir(d)
+    if "LATEST.md" in files or not any(f.startswith("loaded-") for f in files):
+        return False, f"LATEST.md not renamed: {files}"
+    p2 = run_script(home, "hooks/handoff_start.py", "session_start_clear.json")
+    if p2.stdout.strip():
+        return False, "loaded twice"
+    return True, ""
+
+
+def _startup_offer(out, home, p):
+    msg = (out or {}).get("systemMessage", "")
+    if "/handoff load" not in msg or (out or {}).get("hookSpecificOutput"):
+        return False, f"expected an offer only (no injection), got {out}"
+    return True, ""
+
+
+def _save_check(out, home, p):
+    t = (out or {}).get("text", "")
+    if not (out or {}).get("ok") or "Handoff saved:" not in t or "252,000" not in t or "/clear" not in t:
+        return False, f"unexpected: {t[:200]}"
+    if "sections missing" in t:
+        return False, "fixture doc has all sections but a warning was shown"
+    import handoff
+    d = in_home(home, handoff.handoff_dir, os.getcwd())
+    files = os.listdir(d)
+    if "LATEST.md" not in files or len(files) != 2:
+        return False, f"expected <stamp>.md + LATEST.md, got {files}"
+    rows = read_jsonl(home, "savings.jsonl")
+    if not rows or rows[-1]["mod"] != "handoff" or rows[-1]["tokens_before"] != 252000 \
+            or not (0 < rows[-1]["tokens_after"] < 1000):
+        return False, f"saving not logged right: {rows}"
+    return True, ""
+
+
+def _save_bad(out, home, p):
+    if (out or {}).get("ok") or "not saved" not in (out or {}).get("text", ""):
+        return False, f"non-markdown reply should be refused: {out}"
+    return True, ""
+
+
+def _load_cli(out, home, p):
+    o = out or {}
+    if "Loaded handoff" not in o.get("text", "") or not (o.get("context") or "").startswith("[Handoff]"):
+        return False, f"unexpected: {o}"
+    return True, ""
+
+
+def _save_setup(home):
+    pass
+
+
+register(
+    Case("handoff", "Stop below threshold -> silent", "hooks/handoff_stop.py", "stop_main.json", _silent,
+         setup=_transcript(120_000), max_ms=300),
+    Case("handoff", "Stop at 252k -> warning", "hooks/handoff_stop.py", "stop_main.json", _warned(252),
+         setup=_transcript(252_000)),
+    Case("handoff", "warned once, same size -> silent", "hooks/handoff_stop.py", "stop_main.json", _silent,
+         setup=_warn_repeat_setup),
+    Case("handoff", "+50k later -> warns again", "hooks/handoff_stop.py", "stop_main.json", _warned(303),
+         setup=_warn_step_setup),
+    Case("handoff", "sub-agent Stop / sidechain ignored", "hooks/handoff_stop.py", "stop_subagent.json", _silent,
+         setup=_transcript(100_000, sidechain_ctx=900_000)),
+    Case("handoff", "/clear -> LATEST injected + renamed, once", "hooks/handoff_start.py",
+         "session_start_clear.json", _clear_loaded, setup=_latest_setup()),
+    Case("handoff", "startup, fresh handoff -> offer only", "hooks/handoff_start.py",
+         "session_start_startup_a.json", _startup_offer, setup=_latest_setup()),
+    Case("handoff", "startup, handoff > 24h old -> silent", "hooks/handoff_start.py",
+         "session_start_startup_a.json", _silent, setup=_latest_setup(age_s=25 * 3600)),
+    Case("handoff", "no handoff for project -> nothing", "hooks/handoff_start.py",
+         "session_start_clear.json", _silent),
+    Case("handoff", "save: files + saving logged", "lib/ts_cli.py", "handoff_doc.md", _save_check,
+         args=["handoff-save", "s-handoff", "252000", '{"cache_read_input_tokens": 250000, "output_tokens": 900}']),
+    Case("handoff", "save: non-markdown reply refused", "lib/ts_cli.py", "session_start_startup.json", _save_bad,
+         args=["handoff-save", "s-handoff", "1000", "{}"]),
+    Case("handoff", "/handoff load returns context", "lib/ts_cli.py", None, _load_cli,
+         args=["handoff-load", "s-handoff"], setup=_latest_setup(project=None)),
+)

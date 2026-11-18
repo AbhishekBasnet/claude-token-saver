@@ -338,6 +338,42 @@ def read_transcript(tpath: str | None) -> dict:
     return out
 
 
+def last_usage(tpath: str | None, max_bytes: int = 4_000_000) -> dict | None:
+    """Latest main-thread assistant usage, read backwards from the end of the
+    transcript (cheap on huge transcripts). Returns {"usage", "context_tokens",
+    "ts"} or None. context_tokens = input + cache_read + cache_creation."""
+    if not tpath or not os.path.exists(tpath):
+        return None
+    try:
+        size = os.path.getsize(tpath)
+        chunk, read, tail = 65536, 0, b""
+        with open(tpath, "rb") as f:
+            while read < min(size, max_bytes):
+                step = min(chunk, size - read)
+                read += step
+                f.seek(size - read)
+                tail = f.read(step) + tail
+                lines = tail.split(b"\n")
+                for raw in reversed(lines[1:] if read < size else lines):
+                    if b'"assistant"' not in raw or b'"usage"' not in raw:
+                        continue
+                    try:
+                        d = json.loads(raw)
+                    except Exception:
+                        continue
+                    if d.get("type") != "assistant" or d.get("isSidechain"):
+                        continue
+                    u = (d.get("message") or {}).get("usage")
+                    if isinstance(u, dict):
+                        return {"usage": u, "ts": d.get("timestamp"),
+                                "context_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+                                + u.get("cache_creation_input_tokens", 0)}
+                tail = lines[0] if read < size else b""
+    except Exception as e:
+        debug(f"[transcript] tail {tpath}: {e}")
+    return None
+
+
 # ---------------------------------------------------------------- EXPECTS --
 
 _TYPES = {"str": str, "int": int, "bool": bool, "dict": dict, "list": list,

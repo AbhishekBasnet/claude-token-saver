@@ -45,3 +45,46 @@ test('/mods answers display-only even when Python is unreachable', async $ => {
   expect(r.isTextDisplayOnly).toBe(true)
   expect(r.text).toContain('token-saver')
 })
+
+test('/handoff writes the doc through a fork and saves it via Python', async ($, on) => {
+  const calls: string[][] = []
+  let savedStdin = ''
+  on('process.run', (_, e) => {
+    calls.push([...e.argv])
+    const cmd = e.argv[2]
+    if (cmd === 'handoff-prompt') return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, text: 'WRITE HANDOFF' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (cmd === 'handoff-save') {
+      savedStdin = e.init?.stdin ?? ''
+      return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, text: 'Handoff saved: /x/LATEST.md' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
+    return { value: { exitCode: 0, stdout: '{"ok":true}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  let forkPrompt = ''
+  on('model.fork', (_, e) => {
+    forkPrompt = e.prompt
+    return { value: { isAnswered: true, text: '# Handoff\n## Goal\nX', usage: { input_tokens: 5, output_tokens: 900, cache_read_input_tokens: 250000, cache_creation_input_tokens: 0 } } }
+  })
+  on('session.id', () => ({ value: 'sess-1' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 252000, window: 1000000 }, rateLimits: [] } }))
+
+  const r = await $.command.run({ command: 'handoff', args: '' })
+  expect(forkPrompt).toBe('WRITE HANDOFF')
+  expect(savedStdin).toBe('# Handoff\n## Goal\nX')
+  const save = calls.find(c => c[2] === 'handoff-save') ?? []
+  expect(save[4]).toBe('252000')
+  expect(r.isTextDisplayOnly).toBe(true)
+  expect(r.text).toContain('Handoff saved')
+})
+
+test('/handoff with nothing to fork says so and saves nothing', async ($, on) => {
+  const calls: string[] = []
+  on('process.run', (_, e) => {
+    calls.push(e.argv[2] ?? '')
+    return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, text: 'P' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('model.fork', () => ({ value: { isAnswered: false, reason: 'nothing-to-fork', usage: { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+  on('session.id', () => ({ value: 'sess-2' }))
+  const r = await $.command.run({ command: 'handoff', args: '' })
+  expect(r.text).toContain('nothing to hand off')
+  expect(calls.includes('handoff-save')).toBe(false)
+})
