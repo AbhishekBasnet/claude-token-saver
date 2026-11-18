@@ -215,3 +215,134 @@ register(
     Case("switchboard", "/savings session filters", CLI, None, _savings_session,
          args=["savings", "s1", "session"], setup=_savings_setup),
 )
+
+
+# ---------------------------------------------------------------- doctor
+import json as _json  # noqa: E402
+from stlib import run_script  # noqa: E402
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+FIXDIR = os.path.join(HERE, "fixtures")
+DOCTOR = "hooks/doctor_start.py"
+EMPTY_CLAUDE = {"TOKEN_SAVER_CLAUDE_DIR": "/nonexistent-claude-dir"}
+
+
+def _state_setup(**st):
+    def setup(home):
+        with open(os.path.join(home, "state.json"), "w") as f:
+            _json.dump(st, f)
+    return setup
+
+
+def _update_check(out, home, p):
+    msg = (out or {}).get("systemMessage", "")
+    for n in ("updated 2.1.300 -> 2.1.327", "self-test passed", "truncated tool_input for Read",
+              "status line segments"):
+        if n not in msg:
+            return False, f"missing {n!r} in notice: {msg[:200]!r}"
+    for n in ("Future line", "Old line"):
+        if n in msg:
+            return False, f"changelog range wrong: {n!r} included"
+    st = read_json(home, "state.json") or {}
+    if st.get("last_seen_version") != "2.1.327" or not st.get("last_selftest", {}).get("ok"):
+        return False, f"state not updated: {st}"
+    return True, ""
+
+
+def _silent(out, home, p):
+    if out is not None:
+        return False, f"expected no notice, got {out}"
+    return True, ""
+
+
+def _conflict_setup(home):
+    cd = os.path.join(home, "fake-claude")
+    os.makedirs(os.path.join(cd, "plugins"))
+    with open(os.path.join(cd, "plugins", "installed_plugins.json"), "w") as f:
+        _json.dump({"version": 2, "plugins": {"read-guard@test": [
+            {"scope": "user", "installPath": os.path.join(FIXDIR, "conflict_plugin")}]}}, f)
+    with open(os.path.join(cd, "settings.json"), "w") as f:
+        _json.dump({"enabledPlugins": {"read-guard@test": True}}, f)
+    _state_setup(last_seen_version="2.1.327")(home)
+
+
+def _conflict_check(out, home, p):
+    msg = (out or {}).get("systemMessage", "")
+    if "read-guard@test has a PreToolUse hook on Read" not in msg or "Fix:" not in msg:
+        return False, f"Read conflict not reported with a fix: {msg[:300]!r}"
+    if "also defines /savings" not in msg:
+        return False, "duplicate /savings command not reported"
+    # reported once: a second session start says nothing new
+    p2 = run_script(home, DOCTOR, "session_start_startup.json", env={
+        "TOKEN_SAVER_CLAUDE_DIR": os.path.join(home, "fake-claude"),
+        "TOKEN_SAVER_FAKE_VERSION": "2.1.327",
+        "TOKEN_SAVER_OUR_HOOKS_FILE": os.path.join(FIXDIR, "our_hooks_full.json")})
+    if p2.stdout.strip():
+        return False, f"conflict reported twice: {p2.stdout[:120]}"
+    return True, ""
+
+
+def _drift_setup(home):
+    run_script(home, "hooks/session_probe.py", "session_start_missing_source.json")
+
+
+def _drift_report(out, home, p):
+    t = (out or {}).get("text", "")
+    if "schema drift (24h): 1" not in t or "missing source" not in t:
+        return False, f"doctor report does not show the drift: {t[-400:]!r}"
+    return True, ""
+
+
+def _fault_setup(home):
+    for _ in range(2):
+        run_script(home, "selftest/fault_hook.py", "session_start_startup.json")
+
+
+def _breaker_check(out, home, p):
+    msg = (out or {}).get("systemMessage", "")
+    if "disabled handoff after 3 errors in this session" not in msg:
+        return False, f"no breaker notice on 3rd error: {out}"
+    c = (read_json(home, "config.json") or {}).get("handoff", {})
+    if c.get("enabled") is not False or c.get("disabled_by") != "doctor" or "TimeoutError" not in c.get("reason", ""):
+        return False, f"config not auto-disabled with reason: {c}"
+    p4 = run_script(home, "selftest/fault_hook.py", "session_start_startup.json")
+    if p4.stdout.strip():
+        return False, "notice shown again (should be once)"
+    import switchboard
+    table = in_home(home, switchboard.mods_cmd, [], "fixture-session-1")
+    if "off (doctor)" not in table or "reason:" not in table:
+        return False, "/mods does not show why"
+    on = in_home(home, switchboard.mods_cmd, ["on", "handoff"], "fixture-session-1")
+    if (read_json(home, "config.json") or {})["handoff"].get("disabled_by"):
+        return False, f"/mods on did not clear disabled_by: {on}"
+    return True, ""
+
+
+def _doctor_crash_check(out, home, p):
+    if p.returncode != 0 or out is not None:
+        return False, f"doctor failure leaked: rc={p.returncode} out={out}"
+    if not any(r["kind"] == "error" and r["mod"] == "doctor" for r in read_jsonl(home, "health.jsonl")):
+        return False, "doctor error not logged"
+    return True, ""
+
+
+register(
+    Case("doctor", "version change -> self-test + changelog", DOCTOR, "session_start_startup.json", _update_check,
+         setup=_state_setup(last_seen_version="2.1.300"),
+         env={**EMPTY_CLAUDE, "TOKEN_SAVER_FAKE_VERSION": "2.1.327",
+              "TOKEN_SAVER_CHANGELOG_FILE": os.path.join(FIXDIR, "changelog.md")}),
+    Case("doctor", "same version, no conflicts -> silent", DOCTOR, "session_start_startup.json", _silent,
+         setup=_state_setup(last_seen_version="2.1.327"),
+         env={**EMPTY_CLAUDE, "TOKEN_SAVER_FAKE_VERSION": "2.1.327"}, max_ms=300),
+    Case("doctor", "dummy plugin on Read -> conflict + fix, once", DOCTOR, "session_start_startup.json",
+         _conflict_check, setup=_conflict_setup,
+         env={"TOKEN_SAVER_FAKE_VERSION": "2.1.327", "TOKEN_SAVER_CLAUDE_DIR": "{home}/fake-claude",
+              "TOKEN_SAVER_OUR_HOOKS_FILE": os.path.join(FIXDIR, "our_hooks_full.json")}),
+    Case("doctor", "missing field -> drift shown in /mods doctor", "lib/ts_cli.py", None, _drift_report,
+         args=["mods", "s1", "doctor"], setup=_drift_setup,
+         env={**EMPTY_CLAUDE, "TOKEN_SAVER_FAKE_VERSION": "2.1.327"}),
+    Case("doctor", "mod throws 3x -> disabled, one notice", "selftest/fault_hook.py", "session_start_startup.json",
+         _breaker_check, setup=_fault_setup),
+    Case("doctor", "doctor itself fails -> session unaffected", DOCTOR, "session_start_startup.json",
+         _doctor_crash_check, setup=_crash_setup, env={**EMPTY_CLAUDE, "TOKEN_SAVER_FAKE_VERSION": "2.1.327"}),
+)

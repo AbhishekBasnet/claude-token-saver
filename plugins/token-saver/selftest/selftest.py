@@ -31,6 +31,7 @@ def run_case(c: Case) -> tuple[bool, str, int]:
             c.setup(home)
         env = {k: v for k, v in os.environ.items() if not k.startswith("TOKEN_SAVER_")}
         env["TOKEN_SAVER_HOME"] = home
+        env["TOKEN_SAVER_SELFTEST_DEPTH"] = str(int(os.environ.get("TOKEN_SAVER_SELFTEST_DEPTH", "0")) + 1)
         env.update(c.env)
         data = ""
         if c.fixture:
@@ -80,7 +81,12 @@ def load_cases():
 
 
 if __name__ == "__main__":
-    res = run_all(sys.argv[1:] or None)
+    as_json = "--json" in sys.argv
+    mods = [a for a in sys.argv[1:] if not a.startswith("--")] or None
+    res = run_all(mods, verbose=not as_json)
+    if as_json:
+        print(json.dumps(res))
+        sys.exit(0)
     failed = sum(1 for v in res.values() for r in v if not r["ok"])
     total = sum(len(v) for v in res.values())
     print(f"\n{total - failed}/{total} passed")

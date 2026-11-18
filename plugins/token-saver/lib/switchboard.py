@@ -44,8 +44,13 @@ def mods_table(session: str | None) -> str:
     cfg = ts.load_config()
     paused = ts.session_state(session).get("paused")
     lines = ["token-saver mods" + ("   [paused for this session]" if paused else ""), ""]
-    lines.append(f"  {'mod':18} {'state':16} settings")
-    lines.append(f"  {'-' * 18} {'-' * 16} {'-' * 40}")
+    import doctor
+    try:
+        hb = doctor.health_by_mod()
+    except Exception:
+        hb = {}
+    lines.append(f"  {'mod':18} {'state':16} {'health':18} settings")
+    lines.append(f"  {'-' * 18} {'-' * 16} {'-' * 18} {'-' * 32}")
     for mod in MODS:
         c = cfg.get(mod, {})
         if c.get("enabled"):
@@ -58,10 +63,13 @@ def mods_table(session: str | None) -> str:
             state = "on (paused)"
         settings = "  ".join(f"{k}={_fmt_val(v)}" for k, v in c.items()
                              if k not in ("enabled", "disabled_by", "reason"))
-        lines.append(f"  {mod:18} {state:16} {settings}")
+        lines.append(f"  {mod:18} {state:16} {doctor.health_label(mod, cfg, hb):18} {settings}")
         if c.get("disabled_by") == "doctor" and c.get("reason"):
-            lines.append(f"  {'':18} {'':16} reason: {c['reason']}")
-    lines += ["", "  /mods on|off <mod>   /mods set <mod>.<key> <value>   /mods pause|resume   /mods reset"]
+            lines.append(f"  {'':18} {'':16} {'':18} reason: {c['reason']}")
+    st = ts.load_state().get("last_selftest")
+    if st:
+        lines += ["", f"  last {st.get('summary', '')} at {st.get('ts', '')[:16]}"]
+    lines += ["", "  /mods on|off <mod>   /mods set <mod>.<key> <value>   /mods pause|resume   /mods reset   /mods doctor"]
     return "\n".join(lines)
 
 
@@ -102,6 +110,7 @@ def mods_cmd(args: list[str], session: str | None) -> str:
             cfg[mod].pop("disabled_by", None)
             cfg[mod].pop("reason", None)
         ts.save_config(cfg)
+        ts.health("toggle", mod, session=session, enabled=sub == "on")
         return f"token-saver: {mod} is now {sub}. Applies from the next event."
 
     if sub == "set":
@@ -147,7 +156,8 @@ def mods_cmd(args: list[str], session: str | None) -> str:
                 "Run /mods reset confirm to proceed.")
 
     if sub == "doctor":
-        return "token-saver: doctor is not built yet (build step 2)."
+        import doctor
+        return doctor.report(os.getcwd())
 
     return (f"token-saver: unknown subcommand '{args[0]}'.\n"
             "  /mods                       list mods\n"
@@ -234,7 +244,35 @@ def savings_cmd(args: list[str], session: str | None) -> str:
         for r in top:
             lines.append(f"  {_saved(r):>10,}  {r.get('mod', '?'):16} {str(r.get('detail', ''))[:60]}")
 
+    off_notes = _off_during(sel, scope, now, day0)
+    if off_notes:
+        lines += ["", "  note: " + "; ".join(off_notes) + " - their savings for this period are incomplete."]
     lines += ["", f"  Token counts are as logged by each mod (some are len/4 estimates).",
               f"  $ = API-equivalent at Opus 5.5 input price (${PRICES['opus']['input']:.2f}/M, {PRICE_SOURCE});",
               "  on a subscription this is quota, not money. Estimates only."]
     return "\n".join(lines)
+
+
+def _off_during(sel, scope, now, day0) -> list[str]:
+    """Mods that were off (now, or toggled/auto-disabled) during the period."""
+    since = {"today": day0, "7d": now - 7 * 86400, "week": now - 7 * 86400}.get(scope, 0)
+    cfg = ts.load_config()
+    notes = []
+    for mod in MODS:
+        c = cfg.get(mod, {})
+        if not c.get("enabled"):
+            notes.append(f"{mod} is off" + (" (doctor)" if c.get("disabled_by") == "doctor" else ""))
+    p = ts.path("health.jsonl")
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("kind") in ("toggle", "auto_disabled") and not r.get("enabled", False) \
+                        and _parse_ts(r.get("ts", "")) >= since:
+                    note = f"{r.get('mod')} was off for part of it"
+                    if note not in notes and not any(n.startswith(f"{r.get('mod')} is off") for n in notes):
+                        notes.append(note)
+    return notes

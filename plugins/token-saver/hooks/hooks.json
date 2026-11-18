@@ -1,8 +1,23 @@
 {
-  "modules": ["./shim.tsx"],
+  "modules": [
+    "./shim.tsx"
+  ],
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_probe.py\"", "timeout": 5 } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/session_probe.py\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/doctor_start.py\"",
+            "timeout": 90
+          }
+        ]
+      }
     ]
   }
 }

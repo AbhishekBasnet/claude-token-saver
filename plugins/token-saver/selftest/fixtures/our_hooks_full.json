@@ -1,0 +1,5 @@
+{ "hooks": {
+  "SessionStart": [ { "hooks": [ { "type": "command", "command": "x" } ] } ],
+  "PreToolUse":   [ { "matcher": "Agent|Task", "hooks": [ { "type": "command", "command": "x" } ] } ],
+  "PostToolUse":  [ { "matcher": "Read", "hooks": [ { "type": "command", "command": "x" } ] } ]
+} }

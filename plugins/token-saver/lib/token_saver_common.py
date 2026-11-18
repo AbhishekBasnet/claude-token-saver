@@ -80,11 +80,66 @@ def health(kind: str, mod: str, **fields) -> None:
         pass
 
 
-def record_error(mod: str, err, session: str | None = None) -> None:
-    """Feeds Doctor's circuit breaker (health.jsonl kind=error)."""
+BREAKER_SESSION = 3     # errors in one session
+BREAKER_DAY = 10        # errors in 24 h
+
+
+def record_error(mod: str, err, session: str | None = None) -> str | None:
+    """Logs an error (health.jsonl kind=error) and runs Doctor's circuit breaker.
+
+    Returns a one-time notice when this error tripped the breaker (the mod is
+    then disabled in config.json with disabled_by=doctor), else None.
+    """
     text = f"{type(err).__name__}: {err}" if isinstance(err, BaseException) else str(err)
     debug(f"[{mod}] error session={session}: {text}")
     health("error", mod, session=session, error=text[:300])
+    try:
+        return _circuit_breaker(mod, session, text)
+    except Exception as e:
+        debug(f"[breaker] {e}")
+        return None
+
+
+def _circuit_breaker(mod: str, session: str | None, text: str) -> str | None:
+    if mod not in DEFAULT_CONFIG:
+        return None
+    cfg = load_config()
+    if not cfg.get(mod, {}).get("enabled") or cfg[mod].get("disabled_by") == "doctor":
+        return None
+    cutoff = time.time() - 86400
+    in_session = in_day = 0
+    with open(path("health.jsonl"), encoding="utf-8") as f:
+        for line in f:
+            if '"error"' not in line or f'"{mod}"' not in line:
+                continue
+            try:
+                r = json.loads(line)
+            except Exception:
+                continue
+            if r.get("kind") != "error" or r.get("mod") != mod:
+                continue
+            try:
+                t = time.mktime(time.strptime(r["ts"][:19], "%Y-%m-%dT%H:%M:%S"))
+            except Exception:
+                t = 0
+            if t >= cutoff:
+                in_day += 1
+            if session and r.get("session") == session:
+                in_session += 1
+    if in_session >= BREAKER_SESSION:
+        why = f"{in_session} errors in this session"
+    elif in_day >= BREAKER_DAY:
+        why = f"{in_day} errors in 24 h"
+    else:
+        return None
+    short = text.split(":")[0][:60]
+    cfg[mod]["enabled"] = False
+    cfg[mod]["disabled_by"] = "doctor"
+    cfg[mod]["reason"] = f"{why} (last: {text[:120]})"
+    save_config(cfg)
+    health("auto_disabled", mod, session=session, reason=cfg[mod]["reason"])
+    return (f"doctor: disabled {mod} after {why} ({short}). "
+            f"/mods doctor for details, /mods on {mod} to re-enable.")
 
 
 # ---------------------------------------------------------------- config ---
@@ -418,6 +473,7 @@ def run_hook(mod: str, expects: dict, handler, *, check_enabled: bool = True) ->
     try:
         raw = sys.stdin.read()
         event = json.loads(raw) if raw.strip() else {}
+        _note_seen(event)
         if not check_expects(event, expects, mod):
             return 0
         ctx = Ctx(mod, event, DRY_RUN)
@@ -428,6 +484,40 @@ def run_hook(mod: str, expects: dict, handler, *, check_enabled: bool = True) ->
             sys.stdout.write(json.dumps(out))
     except Exception as e:
         import traceback
-        record_error(mod, e, event.get("session_id") if isinstance(event, dict) else None)
         debug(traceback.format_exc().strip().replace("\n", " | "))
+        notice = record_error(mod, e, event.get("session_id") if isinstance(event, dict) else None)
+        if notice:
+            # Display only: the event itself still passes through unchanged.
+            sys.stdout.write(json.dumps({"systemMessage": notice}))
     return 0
+
+
+def _note_seen(event) -> None:
+    """Live smoke data for Doctor: which hook events (and tools) actually fire.
+    Writes only the first time a key is seen in a session."""
+    try:
+        if not isinstance(event, dict):
+            return
+        ev = event.get("hook_event_name")
+        sid = event.get("session_id")
+        if not ev or not sid:
+            return
+        tool = event.get("tool_name")
+        keys = [ev] + ([f"tool:{tool}"] if tool else [])
+        sst = session_state(sid)
+        seen = set(sst.get("seen", []))
+        new = [k for k in keys if k not in seen]
+        if not new:
+            return
+        sst["seen"] = sorted(seen | set(new))
+        save_session_state(sid, sst)
+        st = load_state()
+        es = st.setdefault("events_seen", {})
+        for k in new:
+            if k.startswith("tool:"):
+                st.setdefault("tool_last_seen_session", {})[k[5:]] = st.get("session_count", 0)
+            else:
+                es[k] = now_iso()
+        save_state(st)
+    except Exception as e:
+        debug(f"[seen] {e}")

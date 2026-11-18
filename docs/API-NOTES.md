@@ -148,3 +148,13 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 - `claude plugin validate` also type-checks the shim (it caught a `SessionMessagesResult` deny case). `claude plugin test` runs `selftest/shim.test.tsx` on the real engine. No `tsc` install needed.
 - The card is drawn by a `ui.render` hook on `ToolUse`, from `$.state` family `token-saver.card` keyed by `tool_use_id`. The shim fills it in a `tool.call` hook after `next(e)` by reading `cache/cards/<tool_use_id>.json` (Python: `write_card()`). Tested on terminal and desktop surfaces.
 - Pricing for the `/savings` $ column: Opus 5.5 at $4.00/M input (list price, cached 2026-11-03), labelled as an API-equivalent estimate.
+
+## 12. Verified in step 2: Doctor (2026-11-18)
+- `claude --version` is a native binary that answers in ~0 s, so it's checked on every SessionStart (no caching needed). Doctor's SessionStart hook takes **~30 ms** when nothing changed.
+- There's no local changelog. On a version change Doctor GETs `raw.githubusercontent.com/anthropics/claude-code/main/CHANGELOG.md` (6 s timeout, fails open, sends nothing but a generic User-Agent) and lists lines from the skipped versions that mention hooks, plugins, mods or the status line (case-insensitive), or `Task`/`Agent`/`Read` (case-sensitive).
+- Live: faking `last_seen_version` 2.1.326 then starting a session gave "updated 2.1.326 -> 2.1.327 … self-test passed (24/24)" plus 8 relevant release-note lines, in a session that took 3.4 s wall in total.
+- Conflict scan reads `~/.claude/plugins/installed_plugins.json` (`installPath`) together with `enabledPlugins` from the user and project settings, then each plugin's `hooks/hooks.json` (classic hooks plus module source), manifest `hooks`, and `commands/*.md`. It's cached by settings and registry mtimes. A new high/medium conflict is reported once at session start; info-level ones only appear in `/mods doctor`.
+- Their `PreToolUse` on tool T conflicts with our Pre *or* Post hook on T (they may deny it). Their `PostToolUse` on T conflicts with our Post on T.
+- Circuit breaker: 3 errors in one session or 10 in 24 h disables the mod (`disabled_by: doctor`, `reason`). It shows **one** `systemMessage` from the failing hook (display only; the event still passes through unchanged) and never re-enables on its own.
+- Self-test nesting: a self-test started from inside a self-test runs only the foundation cases, which never call Doctor, so it can't recurse.
+- Not done live: a real third-party plugin conflict. Installing a dummy plugin into your setup would be invasive, so the self-test covers it with a fixture plugin (`selftest/fixtures/conflict_plugin`).

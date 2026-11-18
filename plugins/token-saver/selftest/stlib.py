@@ -58,3 +58,19 @@ def in_home(home, fn, *a, **kw):
             os.environ.pop("TOKEN_SAVER_HOME", None)
         else:
             os.environ["TOKEN_SAVER_HOME"] = old
+
+
+def run_script(home, script, fixture=None, args=None, env=None):
+    """Run a plugin script as a hook would (for multi-step setups/checks)."""
+    import subprocess
+    plugin = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    e = {k: v for k, v in os.environ.items() if not k.startswith("TOKEN_SAVER_")}
+    e["TOKEN_SAVER_HOME"] = home
+    e["TOKEN_SAVER_SELFTEST_DEPTH"] = str(int(os.environ.get("TOKEN_SAVER_SELFTEST_DEPTH", "0")) + 1)
+    e.update(env or {})
+    data = ""
+    if fixture:
+        with open(os.path.join(plugin, "selftest", "fixtures", fixture), encoding="utf-8") as f:
+            data = f.read()
+    return subprocess.run([sys.executable, os.path.join(plugin, script)] + (args if args is not None else ["--dry-run"]),
+                          input=data, capture_output=True, text=True, timeout=60, env=e)
