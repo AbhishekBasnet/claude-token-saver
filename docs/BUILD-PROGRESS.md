@@ -8,8 +8,8 @@ Written 2026-11-18 at the end of the first build session. This is the backup if 
 - Fedora 45 KDE, Claude subscription (no API key). Python stdlib only, and give a `dnf` command instead of installing anything. User scope install. Fail open.
 - **No emoji anywhere** in mod output. Use plain prefixes (`token-saver:`, `doctor:`, `handoff:`).
 - **README:** only numbers that were actually measured.
-- **Commits:** author `Claude <noreply@anthropic.com>`, committer is the user (repo-local `user.name`/`user.email` = Abhishek / their hotmail). Commit with `git commit --author="Claude <noreply@anthropic.com>" -m "<short one-line message>"`. **No `Co-Authored-By` line.** All earlier commits were rewritten this way on 2026-11-18, before the first push (backup branch `backup-before-identity`).
-- **GitHub repo:** must be **private** (step 8).
+- **Commits:** author `Claude <noreply@anthropic.com>`, committer is the user (repo-local `user.name`/`user.email` = Abhishek / their GitHub noreply address). Commit with `git commit --author="Claude <noreply@anthropic.com>" -m "<short one-line message>"`. **No `Co-Authored-By` line.** All earlier commits were rewritten this way on 2026-11-18, before the first push (backup branch `backup-before-identity`).
+- **GitHub repo:** public (user changed this from private on 2026-11-18). Committer emails use the GitHub noreply address.
 - **Info card:** when a mod acts on a tool call, show the card under that tool row (built in step 1; `write_card()` in Python, drawn by the shim).
 
 ## Done (committed)
