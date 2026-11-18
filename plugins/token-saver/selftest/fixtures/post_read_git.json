@@ -1,0 +1,1 @@
+{"session_id": "s-read", "transcript_path": "{home}/transcript.jsonl", "cwd": "/tmp/project-a", "hook_event_name": "PostToolUse", "tool_name": "Read", "tool_use_id": "toolu_read1", "tool_input": {"file_path": "{home}/.git/logs/HEAD"}, "tool_response": null}

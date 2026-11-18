@@ -180,3 +180,15 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 - SessionStart in `-p` carries **no `model`** field (keys: cwd, hook_event_name, session_id, source, transcript_path). The main model comes from the transcript's latest reply (polled up to 1 s on the first turn), then from SessionStart's `model` when present, then from the settings `model`.
 - Live, with Sonnet as the main model: `updatedInput.model = "haiku"` made the sub-agent run on Haiku (its transcript's `message.model`). Three runs of "find all API routes" over a 3-file folder: 2-4 requests, 38k-74k input and 0.6k-1.8k output tokens. Est. cost $0.0021-$0.0032 on Haiku vs $0.040-$0.062 at Sonnet prices. Usage is summed per request id, because one request can span several transcript entries.
 - Prices (claude-api reference, cached 2026-11-03), per million tokens, input / output / cache read: Opus 5.5 $4 / $20 / $0.20, Sonnet 5.5 $2 / $10 / $0.10, Haiku 5.5 $0.10 / $0.50 / (not listed; 0.1x input = $0.01 assumed), Fable 5.2 $8 / $40 / $0.20. Cache writes cost 1.25x input (5 min TTL) or 2x input (1 h TTL).
+
+## 16. Verified in step 6: Input Router (2026-11-18)
+- `Read`'s `tool_response` is `{type: "text", file: {filePath, content, numLines, startLine, totalLines, truncatedByTokenCap}}`. **A plain string in `updatedToolOutput` is ignored for Read:** the model got the full 54k-character file. The replacement has to keep that shape, with `file.content` swapped for the digest. Verified live: the model then gets the digest.
+- Read stops at its own token cap (live: 1,649 of 3,600 lines, `truncatedByTokenCap: true`). In that case the router digests the **whole file from disk**, so the digest covers what Claude would otherwise page through. "Before" is still what Read returned.
+- MCP `tool_response` is a **list of content blocks**. `updatedMCPToolOutput` with the same shape (`[{type: "text", text}]`) replaces it. Verified live with a local stdio MCP server.
+- Claude Code saves a large MCP result to a file by itself (live: 128k characters) and passes the hook an error string. That passes through untouched.
+- Live result. Task: find a decision in a 3,600-line `.srt` (~26k tokens est.), on Sonnet, 2 runs each way:
+  - without the router: 4 turns, about 163k input tokens processed per run; the raw read added about 14.5k real tokens to the context.
+  - with the router: 4 turns, about 66k per run; the digest was about 0.6k tokens.
+  - Every run answered correctly. With the router, Claude used the digest's line ranges to Read the exact lines with offset/limit.
+  - $ per run varied from $0.024 to $0.136 with cache state, so tokens are the fair measure.
+- MCP live: a 60-issue result (~11k tokens est.) became a 275-315 token digest. 3 turns, correct answer. The free pre-clean removed 8% in that test.

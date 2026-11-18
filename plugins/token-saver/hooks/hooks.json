@@ -62,6 +62,18 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/input_route.py\"",
+            "timeout": 180
+          }
+        ]
+      }
     ]
   }
 }

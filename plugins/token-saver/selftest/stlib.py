@@ -70,7 +70,9 @@ def run_script(home, script, fixture=None, args=None, env=None):
     e.update(env or {})
     data = ""
     if fixture:
-        with open(os.path.join(plugin, "selftest", "fixtures", fixture), encoding="utf-8") as f:
+        fx = fixture.replace("{home}", home) if fixture.startswith("{home}/") \
+            else os.path.join(plugin, "selftest", "fixtures", fixture)
+        with open(fx, encoding="utf-8") as f:
             data = f.read().replace("{home}", home)
     return subprocess.run([sys.executable, os.path.join(plugin, script)] + (args if args is not None else ["--dry-run"]),
                           input=data, capture_output=True, text=True, timeout=60, env=e)

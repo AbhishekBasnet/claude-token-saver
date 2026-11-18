@@ -558,3 +558,40 @@ def _note_seen(event) -> None:
         save_state(st)
     except Exception as e:
         debug(f"[seen] {e}")
+
+
+def latest_prompt(tpath: str | None, max_bytes: int = 4_000_000) -> str | None:
+    """The user's latest human prompt in the main thread, read from the last
+    max_bytes of the transcript (cheap on huge transcripts). None if not found."""
+    if not tpath or not os.path.exists(tpath):
+        return None
+    try:
+        size = os.path.getsize(tpath)
+        with open(tpath, "rb") as f:
+            f.seek(max(0, size - max_bytes))
+            lines = f.read().split(b"\n")
+        if size > max_bytes:
+            lines = lines[1:]
+        found = None
+        for raw in lines:
+            if b'"user"' not in raw and b'"last-prompt"' not in raw:
+                continue
+            try:
+                d = json.loads(raw)
+            except Exception:
+                continue
+            if d.get("isSidechain"):
+                continue
+            if d.get("type") == "last-prompt" and d.get("lastPrompt"):
+                found = d["lastPrompt"]
+            elif d.get("type") == "user":
+                origin = (d.get("origin") or {}).get("kind")
+                if d.get("isMeta") or (origin and origin != "human"):
+                    continue
+                txt = _text_of((d.get("message") or {}).get("content"))
+                if txt.strip():
+                    found = txt
+        return found
+    except Exception as e:
+        debug(f"[transcript] latest_prompt {tpath}: {e}")
+        return None

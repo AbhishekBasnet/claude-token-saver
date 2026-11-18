@@ -1,0 +1,1 @@
+{"session_id": "s-read", "transcript_path": "{home}/transcript.jsonl", "cwd": "/tmp/project-a", "hook_event_name": "PostToolUse", "tool_name": "mcp__tracker__list_issues", "tool_use_id": "toolu_mcp1", "tool_input": {"project": "x"}, "tool_response": "__FILLED_BY_SETUP__"}

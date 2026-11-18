@@ -38,7 +38,7 @@ See API-NOTES section 15. 13 self-test cases. The card under the Agent row is dr
 
 ## Remaining steps
 - (done) 5 sub-agent router: PreToolUse matcher must be `Agent|Task` (`Task` in `-p`, `Agent` interactive). Uses `updatedInput.model` (sonnet/opus/haiku/fable) and SubagentStop `agent_transcript_path` for real usage. Show a card.
-- 6 Input Router: PostToolUse `Read` + `updatedToolOutput` (not a deny). MCP via `updatedMCPToolOutput`. **Skip PDFs** (user decision). Honour `bypass_once` in session state (set by the card's "read full instead" button). Card with digest.
+- (done, see API-NOTES 16) 6 Input Router: PostToolUse `Read` + `updatedToolOutput` (not a deny). MCP via `updatedMCPToolOutput`. **Skip PDFs** (user decision). Honour `bypass_once` in session state (set by the card's "read full instead" button). Card with digest.
 - 7 Effort Optimizer: suggest mode via UserPromptSubmit. The transcript `effort` field gives the current level. Levels include `xhigh`. Latency concern: heuristics first, Haiku if unclear, or a non-blocking shim toast. Auto mode only via shim `turn.step`.
 - 8 Final: `/mods doctor` all OK, CI workflow, README results (measured only), uninstall and reinstall check, private GitHub repo.
 

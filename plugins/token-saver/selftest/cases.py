@@ -774,3 +774,143 @@ register(
     Case("subagent_router", "no reply yet: main model from SessionStart", ROUTE, "pre_agent_code.json", _untouched,
          setup=_main_from_start_setup, env={**EMPTY_CLAUDE}),
 )
+
+
+# ---------------------------------------------------------------- input router
+IR = "hooks/input_route.py"
+
+
+def _ir_setup(prompt="what did they decide about pricing?", files=True):
+    def setup(home):
+        rows = [{"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": prompt}}]
+        with open(os.path.join(home, "transcript.jsonl"), "w") as f:
+            for r in rows:
+                f.write(_json.dumps(r) + "\n")
+        if files:
+            with open(os.path.join(home, "notes.md"), "w") as f:      # ~20k tokens est.
+                f.write("\n".join(f"Speaker {i % 4}: discussion point {i} about pricing and hiring." for i in range(1400)))
+            with open(os.path.join(home, "big.py"), "w") as f:        # ~3k tokens est.
+                f.write("\n".join(f"def f{i}(x):\n    return x + {i}\n" for i in range(400)))
+            os.makedirs(os.path.join(home, ".git", "logs"), exist_ok=True)
+            with open(os.path.join(home, ".git", "logs", "HEAD"), "w") as f:
+                f.write("x" * 20000)
+    return setup
+
+
+def _digested(tool_use_id, path_name):
+    def check(out, home, p):
+        upd = ((out or {}).get("hookSpecificOutput") or {}).get("updatedToolOutput")
+        body = upd["file"]["content"] if isinstance(upd, dict) else upd
+        if not isinstance(body, str) or not body.startswith("[Input Router] Haiku digest of") or "[stub reply]" not in body:
+            return False, f"no digest delivered: {str(out)[:200]}"
+        if path_name not in body or "offset/limit" not in body:
+            return False, "digest must give the full path and the offset/limit hint"
+        rows = [r for r in read_jsonl(home, "savings.jsonl") if r.get("mod") == "input_router"]
+        if len(rows) != 1 or not rows[0]["tokens_before"] > rows[0]["tokens_after"]:
+            return False, f"saving not logged: {rows}"
+        if not read_json(home, f"cache/cards/{tool_use_id}.json"):
+            return False, "card not written"
+        return True, ""
+    return check
+
+
+def _struct_kept(out, home, p):
+    ok, why = _digested("toolu_read2", "review.md")(out, home, p)
+    if not ok:
+        return ok, why
+    upd = out["hookSpecificOutput"]["updatedToolOutput"]
+    if not isinstance(upd, dict) or upd.get("type") != "text" or upd["file"].get("filePath", "").endswith("review.md") is False:
+        return False, f"structured Read result not kept: {str(upd)[:200]}"
+    if upd["file"]["numLines"] != upd["file"]["content"].count("\n") + 1:
+        return False, "numLines not updated"
+    return True, ""
+
+
+def _passthrough(out, home, p):
+    if out is not None:
+        return False, f"expected untouched, got {str(out)[:200]}"
+    if [r for r in read_jsonl(home, "savings.jsonl") if r.get("mod") == "input_router"]:
+        return False, "saving logged for an untouched read"
+    return True, ""
+
+
+def _timeout_check(out, home, p):
+    ok, why = _passthrough(out, home, p)
+    if not ok:
+        return ok, why
+    log = open(os.path.join(home, "debug.log")).read()
+    if "digest failed" not in log or "timeout" not in log:
+        return False, "timeout not in debug.log"
+    return True, ""
+
+
+def _bypass_setup(home):
+    _ir_setup()(home)
+    os.makedirs(os.path.join(home, "sessions"), exist_ok=True)
+    with open(os.path.join(home, "sessions", "s-read.json"), "w") as f:
+        _json.dump({"bypass_once": [os.path.join(home, "notes.md")]}, f)
+
+
+def _bypass_consumed(out, home, p):
+    ok, why = _passthrough(out, home, p)
+    if not ok:
+        return ok, why
+    if (read_json(home, "sessions/s-read.json") or {}).get("bypass_once"):
+        return False, "bypass_once not consumed"
+    return True, ""
+
+
+def _mcp_setup(home):
+    _ir_setup()(home)
+    big = {"issues": [{"id": i, "title": f"Issue {i}: login fails on Safari", "body": "Steps to reproduce " * 12,
+                       "assignee": {"name": "Ana", "avatar_url": "https://x/a.png"}, "labels": [], "milestone": None,
+                       "attachment": "QUJD" * 300} for i in range(60)]}
+    fx = os.path.join(HERE, "fixtures", "post_mcp.json")
+    d = _json.load(open(fx))
+    d["tool_response"] = [{"type": "text", "text": _json.dumps(big)}]     # MCP results are content blocks
+    # run_script reads fixtures from the plugin folder, so stage a copy in home
+    with open(os.path.join(home, "post_mcp_filled.json"), "w") as f:
+        _json.dump(d, f)
+
+
+def _mcp_check(out, home, p):
+    upd = ((out or {}).get("hookSpecificOutput") or {}).get("updatedMCPToolOutput")
+    text = _json.dumps(upd)
+    if not isinstance(upd, list) or upd[0].get("type") != "text" \
+            or not upd[0]["text"].startswith("[Input Router] Haiku digest of mcp__tracker__list_issues"):
+        return False, f"no MCP digest in the tool's own shape: {text[:200]}"
+    rows = read_jsonl(home, "savings.jsonl")
+    kinds = {r.get("kind") for r in rows if r.get("mod") == "input_router"}
+    if kinds != {"mcp_preclean", "mcp_digest"}:
+        return False, f"expected pre-clean and digest entries, got {kinds}"
+    raw = [r for r in rows if r.get("kind") == "mcp_digest"][0]["path"]
+    if not os.path.exists(raw) or "avatar_url" not in open(raw).read():
+        return False, "raw result not saved in full"
+    return True, ""
+
+
+register(
+    Case("input_router", "~20k-token .md -> digest, path, saving", IR, "post_read_md.json",
+         _digested("toolu_read1", "notes.md"), setup=_ir_setup(), max_ms=600),
+    Case("input_router", "structured Read result kept in shape", IR, "post_read_struct.json", _struct_kept,
+         setup=_ir_setup()),
+    Case("input_router", "3k-token .py -> untouched", IR, "post_read_py.json", _passthrough, setup=_ir_setup()),
+    Case("input_router", "Read with offset/limit -> untouched", IR, "post_read_slice.json", _passthrough,
+         setup=_ir_setup()),
+    Case("input_router", 'prompt says "verbatim" -> untouched', IR, "post_read_md.json", _passthrough,
+         setup=_ir_setup("quote the pricing part verbatim please")),
+    Case("input_router", "file about to be edited -> untouched", IR, "post_read_md.json", _passthrough,
+         setup=_ir_setup("update notes.md with the new pricing")),
+    Case("input_router", ".git file -> untouched", IR, "post_read_git.json", _passthrough, setup=_ir_setup()),
+    Case("input_router", ".pdf -> untouched (by design)", IR, "post_read_pdf.json", _passthrough, setup=_ir_setup()),
+    Case("input_router", "read-full-instead button -> once", IR, "post_read_md.json", _bypass_consumed,
+         setup=_bypass_setup),
+    Case("input_router", "forced Haiku timeout -> passes through", IR, "post_read_md.json", _timeout_check,
+         setup=_ir_setup(), env={"TOKEN_SAVER_STUB_FAIL": "timeout"}),
+)
+
+
+register(
+    Case("input_router", "MCP result: pre-clean, digest, raw saved", IR, "{home}/post_mcp_filled.json", _mcp_check,
+         setup=_mcp_setup),
+)
