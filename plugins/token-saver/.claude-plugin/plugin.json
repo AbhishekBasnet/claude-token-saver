@@ -1,5 +1,6 @@
 {
   "name": "token-saver",
   "version": "0.1.0",
-  "description": "Mods that cut wasted tokens, with a doctor that guards them. Python stdlib hooks plus a thin shim."
+  "description": "Mods that cut wasted tokens, with a doctor that guards them. Python stdlib hooks plus a thin shim.",
+  "types": "./types/index.d.ts"
 }

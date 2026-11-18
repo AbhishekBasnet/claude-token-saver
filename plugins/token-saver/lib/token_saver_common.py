@@ -196,6 +196,28 @@ def log_saving(mod, session, project, before, after, detail, **extra) -> None:
         debug(f"[{mod}] could not log saving: {e}")
 
 
+# ---------------------------------------------------------------- cards ----
+
+def write_card(tool_use_id: str, mod: str, title: str, lines: list, detail: str | None = None,
+               path_: str | None = None) -> None:
+    """Info card the shim draws under the tool row with this tool_use_id.
+    Plain text only (no emoji). Never raises."""
+    if not tool_use_id:
+        return
+    try:
+        safe = "".join(c for c in tool_use_id if c.isalnum() or c in "-_")[:100]
+        d = path("cache", "cards")
+        os.makedirs(d, exist_ok=True)
+        card = {"mod": mod, "title": title, "lines": [str(l) for l in lines][:4], "ts": now_iso()}
+        if detail:
+            card["detail"] = detail[:4000]
+        if path_:
+            card["path"] = path_
+        _write_json_atomic(os.path.join(d, f"{safe}.json"), card)
+    except Exception as e:
+        debug(f"[{mod}] could not write card: {e}")
+
+
 # ---------------------------------------------------------------- transcript
 
 def _text_of(content) -> str:

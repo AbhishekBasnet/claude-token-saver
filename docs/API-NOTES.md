@@ -141,3 +141,10 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 ## 10. UI decisions (user, 2026-11-18)
 - **No emoji anywhere.** All one-line messages use plain prefixes (`token-saver:`, `doctor:`), replacing the spec's 🩺 🔀 📦 ⚡ lines.
 - **Info card under the tool row.** When a mod acts on a tool call (Input Router on `Read`, sub-agent router on `Agent`/`Task`), the shim draws a small bordered card under that call's row via a `ui.render` hook on `{ component: 'ToolUse' }`, keeping the row (`await next(e)`). Data flow: the Python hook writes `cache/cards/<tool_use_id>.json` (mod, model, file, tokens before→after, ms, path). The shim reads it with `$.fs.read`, keyed by `e.requestId` (= tool_use_id). No card file means the shim draws nothing extra. Buttons: `show digest` (expands it) and `read full instead` (tells the next Read of that file to pass through). Shared card component built in step 1, used by each mod after that.
+
+## 11. Verified in step 1 (2026-11-18)
+- `$.command.register` plus a `command.run` hook returning `{ text, isTextDisplayOnly: true }` gives `/mods` and `/savings` with **0 model tokens**. Measured in `claude -p`: input 0, output 0, cost $0, 0 turns.
+- Claude Code labels plugin command output with the plugin name, so Python strips its own `token-saver:` prefix to avoid showing it twice.
+- `claude plugin validate` also type-checks the shim (it caught a `SessionMessagesResult` deny case). `claude plugin test` runs `selftest/shim.test.tsx` on the real engine. No `tsc` install needed.
+- The card is drawn by a `ui.render` hook on `ToolUse`, from `$.state` family `token-saver.card` keyed by `tool_use_id`. The shim fills it in a `tool.call` hook after `next(e)` by reading `cache/cards/<tool_use_id>.json` (Python: `write_card()`). Tested on terminal and desktop surfaces.
+- Pricing for the `/savings` $ column: Opus 5.5 at $4.00/M input (list price, cached 2026-11-03), labelled as an API-equivalent estimate.

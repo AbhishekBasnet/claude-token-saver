@@ -32,10 +32,13 @@ def run_case(c: Case) -> tuple[bool, str, int]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("TOKEN_SAVER_")}
         env["TOKEN_SAVER_HOME"] = home
         env.update(c.env)
-        with open(os.path.join(FIX, c.fixture), encoding="utf-8") as f:
-            data = f.read()
+        data = ""
+        if c.fixture:
+            with open(os.path.join(FIX, c.fixture), encoding="utf-8") as f:
+                data = f.read()
         t0 = time.time()
-        p = subprocess.run([sys.executable, os.path.join(PLUGIN, "hooks", c.script), "--dry-run"],
+        argv = [sys.executable, os.path.join(PLUGIN, c.script)] + (c.args if c.args is not None else ["--dry-run"])
+        p = subprocess.run(argv,
                            input=data, capture_output=True, text=True, timeout=30, env=env)
         ms = int((time.time() - t0) * 1000)
         if p.returncode != 0:
