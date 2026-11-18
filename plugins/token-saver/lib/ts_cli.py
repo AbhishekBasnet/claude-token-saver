@@ -79,6 +79,22 @@ def main(argv):
         if cmd == "handoff-load":
             text, context = handoff.load_now(os.getcwd())
             return {"ok": True, "text": text, "context": context}
+    if cmd == "keepwarm-log":
+        session = argv[1] if len(argv) > 1 else None
+        try:
+            u = json.loads(argv[2]) if len(argv) > 2 else {}
+        except ValueError:
+            u = {}
+        ts.health("keepwarm_ping", "cache_clock", session=session, usage=u)
+        st = ts.session_state(session) if session else {}
+        st["keepwarm_pings"] = int(st.get("keepwarm_pings", 0)) + 1
+        if session:
+            ts.save_session_state(session, st)
+        return {"ok": True, "text": (f"keep-warm ping: {u.get('cache_read_input_tokens', 0):,} tokens read from cache, "
+                                     f"{u.get('input_tokens', 0):,} uncached, {u.get('cache_creation_input_tokens', 0):,} written, "
+                                     f"{u.get('output_tokens', 0):,} out")}
+    if cmd == "keepwarm":
+        return {"ok": True, "text": "keep-warm is under investigation (build step 4); only /keepwarm ping works for now."}
     return {"ok": False, "error": f"unknown command {cmd!r}"}
 
 

@@ -71,6 +71,11 @@ export const register: Register = on => {
           description: 'token-saver: write a detailed handoff doc, then /clear to continue fresh',
           argumentHint: '[load]',
         })
+        await $.command.register({
+          name: 'keepwarm',
+          description: 'token-saver: keep the prompt cache warm while you are away (on|off|ping|status)',
+          argumentHint: '[on|off|ping|status]',
+        })
         await py($, ['shim-loaded', (await $.session.version()).version], 5000)
       }
     } catch {
@@ -140,6 +145,21 @@ export const register: Register = on => {
     const s = await py($, ['handoff-save', sid, String(usage.context.tokens ?? 0), JSON.stringify(fork.usage), notes], 15000, fork.text)
     return { text: s.text ?? `handoff not saved: ${s.error ?? 'no answer'}`, isTextDisplayOnly: true }
   }).catch(() => ({ text: 'Handoff failed (see ~/.claude/token-saver/debug.log). Nothing was changed.', isTextDisplayOnly: true }))
+
+  // /keepwarm ping: one tool-less fork over the live transcript. It reads the main
+  // thread's cached prefix, which is what may refresh the cache's TTL.
+  on('command.run', { command: 'keepwarm' }, async ($, e) => {
+    const sid = await $.session.id()
+    const arg = e.args.trim()
+    if (arg === 'ping') {
+      const fork = await $.model.fork({ prompt: 'Keep-warm ping from token-saver. Reply with exactly: ok' })
+      if (!fork.isAnswered) return { text: `ping not sent: ${fork.reason}`, isTextDisplayOnly: true }
+      const r = await py($, ['keepwarm-log', sid, JSON.stringify(fork.usage)])
+      return { text: r.text ?? 'ping sent', isTextDisplayOnly: true }
+    }
+    const r = await py($, ['keepwarm', sid, arg])
+    return { text: r.text ?? `keepwarm failed: ${r.error ?? 'no answer'}`, isTextDisplayOnly: true }
+  }).catch(() => ({ text: 'keepwarm failed (see ~/.claude/token-saver/debug.log).', isTextDisplayOnly: true }))
 
   // After a call a mod may act on, pick up the card file its hook wrote.
   on('tool.call', async ($, e, next) => {
