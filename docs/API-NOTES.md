@@ -207,3 +207,19 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
   - 4-prompt session (rename, CI/CD design, typo, thanks): $0.1050 with auto vs $0.1049 with mods off.
   - The README must not claim an effort saving.
 - Bug found live and fixed: the "never repeat a suggestion" rule also blocked auto mode's second high->low change. It now applies only to suggest mode.
+
+## 18. Keep Warm: experiment result and build (2026-11-18)
+- Experiment (`~/.claude/token-saver/cache/keepwarm-exp/`). Two `claude -p` Haiku sessions, each with a unique ~39k-token message, then a second message at +70 min (TTL 60 min):
+  | arm | at +50 min | msg2 at +70 min |
+  |---|---|---|
+  | A | `/keepwarm ping` (fork) read 40,492 from cache, wrote 7,704 | **read 40,492**, wrote 10,660 |
+  | B (control) | nothing | read 11,938, **wrote 39,008** |
+- Conclusion: a tool-less `$.model.fork` reads the live session's cached prefix and restarts its TTL. Keep Warm is built.
+- Behaviour:
+  - Off by default: `/keepwarm on|off|status|ping`, or `/mods set cache_clock.keep_warm true` for every session.
+  - The shim's 30 s clock timer asks Python only when the clock file says keep-warm is on and less than 6 min are left.
+  - Python pings when about 5 min are left (half the TTL when the TTL is shorter), never on a cold cache (that would rewrite everything), at most `keep_warm_max_pings` (8) per idle stretch. Your next reply resets the count.
+  - `session.end` turns it off for that session.
+- Each ping is logged with its estimated cost as a **negative** `usd_saved_est`, so `/savings` subtracts it. The cost is priced at the main model: cache read, uncached input, cache writes (5 min x1.25, 1 h x2) and output.
+- Live, timer path: isolated home, `ttl_minutes` 6, Haiku session. After the reply at 14:29:56, the shim pinged by itself at 14:33:26 (12,688 tokens read from cache) and logged the cost.
+- Not measured: how often people actually come back within 8 pings. The README states the cost per ping and the rewrite it avoids; it claims no net saving.

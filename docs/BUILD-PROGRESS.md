@@ -23,7 +23,7 @@ Written 2026-11-18 at the end of the first build session. This is the backup if 
 
 Tests: `python3 tests/run_selftest.py` (38/38) and `claude plugin test plugins/token-saver` (6/6). `claude plugin validate plugins/token-saver` passes.
 
-## Step 4 (Cache Clock): in progress
+## Step 4 (Cache Clock): done (clock + Keep Warm, see API-NOTES 18)
 - Done: `/keepwarm ping` in the shim (`$.model.fork` with a tiny prompt, logged by `ts_cli.py keepwarm-log`). `/keepwarm on|off|status` is a stub.
 - **Keep Warm experiment running in the background** (started 13:17:04, results around 14:27): `~/.claude/token-saver/cache/keepwarm-exp/result-A.json` (ping at +50 min) and `result-B.json` (control). Both msg1 results: cache_read 9,224 (shared system prompt), cache_write about 38.9k (unique text).
   - If A's "msg2 (+70 min)" shows cache_read ≈ 48k and B's ≈ 9k, the ping refreshes the cache. Then build Keep Warm (timer about 5 min before expiry, max 8 pings, configurable, stops at session end, logs each ping's cost).

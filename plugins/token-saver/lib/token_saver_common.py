@@ -21,7 +21,7 @@ DEFAULT_CONFIG = {
     "input_router": {"enabled": True, "threshold_tokens": 2000, "model": "haiku"},
     "effort_optimizer": {"enabled": True, "model": "haiku", "mode": "suggest"},
     "subagent_router": {"enabled": True, "allow_opus": True, "classifier_model": "haiku"},
-    "cache_clock": {"enabled": True, "ttl_minutes": 60, "keep_warm": False},
+    "cache_clock": {"enabled": True, "ttl_minutes": 60, "keep_warm": False, "keep_warm_max_pings": 8},
     "handoff": {"enabled": True, "threshold_tokens": 250000},
 }
 

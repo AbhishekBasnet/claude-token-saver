@@ -197,3 +197,52 @@ test('effort: a sub-agent request is never touched', async ($, on) => {
   await drain($.turn.step({ ...STEP, agentId: 'a1' }))
   expect(k.sent).toEqual(['high'])
 })
+
+// ---------------------------------------------------------------- keep warm
+function kwKit(on: any, keepWarm: boolean, minsLeft: number, due: boolean) {
+  const now = 1_800_000_000_000
+  const calls: string[] = []
+  let forks = 0
+  on('ui.status', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'sess-k' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('clock.every', () => ({ value: undefined }))
+  on('clock.now', () => ({ value: now }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.endsWith('/config.json')) return { value: JSON.stringify({ cache_clock: { enabled: true } }) }
+    if (e.path.endsWith('/cache/clock-sess-k.json')) return { value: JSON.stringify({ expires_at: now / 1000 + minsLeft * 60, keep_warm: keepWarm }) }
+    throw new Error('ENOENT')
+  })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    calls.push(e.argv[2] ?? '')
+    return PROC(e.argv[2] === 'keepwarm-due' ? { ok: true, due } : { ok: true, text: 'logged' })
+  })
+  on('model.fork', () => {
+    forks++
+    return { value: { isAnswered: true, text: 'ok', usage: { input_tokens: 3, output_tokens: 1, cache_read_input_tokens: 40000, cache_creation_input_tokens: 0 } } }
+  })
+  return { calls, forks: () => forks }
+}
+
+test('keep warm: near expiry and due -> one fork ping, logged', async ($, on) => {
+  const k = kwKit(on, true, 4, true)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(k.forks()).toBe(1)
+  expect(k.calls).toContain('keepwarm-log')
+})
+
+test('keep warm: off, or far from expiry -> no Python call, no ping', async ($, on) => {
+  const k = kwKit(on, false, 4, true)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  const k2calls = k.calls.filter(c => c.startsWith('keepwarm'))
+  expect(k2calls).toEqual([])
+  expect(k.forks()).toBe(0)
+})
+
+test('keep warm: Python says not due -> no ping', async ($, on) => {
+  const k = kwKit(on, true, 4, false)
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(k.calls).toContain('keepwarm-due')
+  expect(k.forks()).toBe(0)
+})

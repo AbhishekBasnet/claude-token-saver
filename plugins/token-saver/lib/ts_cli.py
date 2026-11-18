@@ -8,7 +8,9 @@
   ts_cli.py handoff-prompt <session_id> [notes]   {"text": fork prompt} or ok=false if mod off
   ts_cli.py handoff-save <session_id> <ctx_tokens> <usage_json> [notes]   (doc on stdin)
   ts_cli.py handoff-load <session_id>             {"text", "context"}
-  ts_cli.py keepwarm-log <session_id> <usage_json>  log a ping, restart the clock
+  ts_cli.py keepwarm-log <session_id> <usage_json> [auto]  log a ping (+ est. cost), restart the clock
+  ts_cli.py keepwarm-due <session_id>             {"due": bool, "text": why}
+  ts_cli.py keepwarm <session_id> on|off|status
   ts_cli.py effort-check  <session_id> [current]  (prompt on stdin) {"action": none|ask|classified}
   ts_cli.py effort-model  <session_id>            (Haiku reply on stdin) {"action": none|classified}
   ts_cli.py effort-decide <session_id> <current>  (classification on stdin) {"text"?, "apply"?}
@@ -99,16 +101,30 @@ def main(argv):
             u = json.loads(argv[2]) if len(argv) > 2 else {}
         except ValueError:
             u = {}
-        ts.health("keepwarm_ping", "cache_clock", session=session, usage=u)
+        auto = len(argv) > 3 and argv[3] == "auto"
+        ts.health("keepwarm_ping", "cache_clock", session=session, usage=u, auto=auto)
         st = ts.session_state(session) if session else {}
         st["keepwarm_pings"] = int(st.get("keepwarm_pings", 0)) + 1
+        cost = None
         if session:
             ts.save_session_state(session, st)
             import cache_clock
             cache_clock.on_keepwarm_ping(session, u)
+            import subagent_router as sr
+            fam = sr.main_model({"session_id": session, "transcript_path": _transcript_for(session)})
+            if fam in sr.PRICES:
+                cost = sr._cost(u, fam)
+                ts.log_saving("cache_clock", session, os.getcwd(), None, None,
+                              f"keep-warm ping {st['keepwarm_pings']}: cost ${cost:.4f} (est., {fam})",
+                              kind="keepwarm_ping", usd_saved_est=-round(cost, 6), usage=u)
+        cost_txt = f", ~${cost:.4f} (est.)" if cost is not None else ""
         return {"ok": True, "text": (f"keep-warm ping: {u.get('cache_read_input_tokens', 0):,} tokens read from cache, "
                                      f"{u.get('input_tokens', 0):,} uncached, {u.get('cache_creation_input_tokens', 0):,} written, "
-                                     f"{u.get('output_tokens', 0):,} out")}
+                                     f"{u.get('output_tokens', 0):,} out{cost_txt}")}
+    if cmd == "keepwarm-due":
+        import cache_clock
+        due, why = cache_clock.ping_due(argv[1])
+        return {"ok": True, "due": due, "text": why}
     if cmd in ("effort-check", "effort-model", "effort-decide"):
         # check: prompt on stdin -> classification, or "ask" (shim asks Haiku)
         # model: Haiku's reply on stdin -> classification
@@ -141,7 +157,24 @@ def main(argv):
                 return {"ok": True, "action": "none"}
         return {"ok": True, "action": "classified", "mode": mode, "classification": c}
     if cmd == "keepwarm":
-        return {"ok": True, "text": "keep-warm is under investigation (build step 4); only /keepwarm ping works for now."}
+        import cache_clock
+        session = argv[1] if len(argv) > 1 and argv[1] else None
+        arg = (argv[2] if len(argv) > 2 else "").strip().lower()
+        if not session:
+            return {"ok": False, "text": "keep-warm needs a session."}
+        if arg in ("on", "off"):
+            cache_clock.set_keep_warm(session, arg == "on")
+            if arg == "on":
+                return {"ok": True, "text": (f"keep-warm on for this session: pings ~5 min before the cache expires, "
+                                             f"at most {cache_clock.max_pings()} per idle stretch, each logged with its cost. "
+                                             "/keepwarm off to stop.")}
+            return {"ok": True, "text": "keep-warm off for this session."}
+        on = cache_clock.keep_warm_on(session)
+        st = ts.session_state(session)
+        due, why = cache_clock.ping_due(session)
+        return {"ok": True, "text": (f"keep-warm {'on' if on else 'off'}; pings this idle stretch: "
+                                     f"{int(st.get('keepwarm_pings', 0))}/{cache_clock.max_pings()}; next: {why}. "
+                                     "Usage: /keepwarm on|off|status|ping")}
     return {"ok": False, "error": f"unknown command {cmd!r}"}
 
 

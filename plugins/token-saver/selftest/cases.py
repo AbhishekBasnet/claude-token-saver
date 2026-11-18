@@ -1019,3 +1019,84 @@ register(
     Case("effort_optimizer", "mod off -> nothing", CLI, "prompt_rename.txt", _nothing,
          args=["effort-check", "s-eo", "high"], setup=_eo_cfg(enabled=False)),
 )
+
+
+# ---------------------------------------------------------------- keep warm
+def _kw_setup(left_s, on=True, pings=0, cold=False):
+    def setup(home):
+        now = _time.time()
+        os.makedirs(os.path.join(home, "cache"), exist_ok=True)
+        with open(os.path.join(home, "cache", "clock-s-kw.json"), "w") as f:
+            _json.dump({"session": "s-kw", "keep_warm": on, "last_activity": now - 3600 + left_s, "ttl_minutes": 60,
+                        "expires_at": now + (-30 if cold else left_s), "context_tokens": 40000}, f)
+        os.makedirs(os.path.join(home, "sessions"), exist_ok=True)
+        with open(os.path.join(home, "sessions", "s-kw.json"), "w") as f:
+            _json.dump({"keepwarm": on, "keepwarm_pings": pings}, f)
+    return setup
+
+
+def _due(expect, needle=""):
+    def check(out, home, p):
+        if (out or {}).get("due") is not expect or needle not in (out or {}).get("text", ""):
+            return False, f"expected due={expect} ({needle}), got {out}"
+        return True, ""
+    return check
+
+
+def _kw_log_check(out, home, p):
+    rows = [r for r in read_jsonl(home, "savings.jsonl") if r.get("kind") == "keepwarm_ping"]
+    if len(rows) != 1 or not rows[0]["usd_saved_est"] < 0:
+        return False, f"ping cost not logged as a negative $: {rows}"
+    # opus: 40,000 read x $0.20 + 30 in x $4 + 4 out x $20 (+ 0 written), per million
+    want = (40000 * 0.20 + 30 * 4 + 4 * 20) / 1e6
+    if abs(-rows[0]["usd_saved_est"] - want) > 1e-6:
+        return False, f"cost {rows[0]['usd_saved_est']} != -{want}"
+    c = read_json(home, "cache/clock-s-kw.json")
+    if c["expires_at"] - _time.time() < 3590 or (read_json(home, "sessions/s-kw.json") or {}).get("keepwarm_pings") != 1:
+        return False, "clock not restarted or ping not counted"
+    if "~$0.0082" not in (out or {}).get("text", ""):
+        return False, f"cost not shown: {out}"
+    return True, ""
+
+
+def _kw_on_check(out, home, p):
+    st = read_json(home, "sessions/s-kw.json") or {}
+    c = read_json(home, "cache/clock-s-kw.json") or {}
+    if st.get("keepwarm") is not True or c.get("keep_warm") is not True or "keep-warm on" not in (out or {}).get("text", ""):
+        return False, f"/keepwarm on did not stick: {st} {c} {out}"
+    return True, ""
+
+
+def _kw_reset_setup(home):
+    _clock_transcript()(home)
+    os.makedirs(os.path.join(home, "sessions"), exist_ok=True)
+    with open(os.path.join(home, "sessions", "s-handoff.json"), "w") as f:
+        _json.dump({"keepwarm": True, "keepwarm_pings": 5}, f)
+
+
+def _kw_reset_check(out, home, p):
+    st = read_json(home, "sessions/s-handoff.json") or {}
+    if st.get("keepwarm_pings") != 0 or (read_json(home, "cache/clock-s-handoff.json") or {}).get("keep_warm") is not True:
+        return False, f"a reply must reset the ping budget and keep the flag: {st}"
+    return True, ""
+
+
+register(
+    Case("cache_clock", "keep-warm: 4 min left -> ping due", CLI, None, _due(True, "ping 1 of 8"),
+         args=["keepwarm-due", "s-kw"], setup=_kw_setup(240)),
+    Case("cache_clock", "keep-warm: 20 min left -> not yet", CLI, None, _due(False, "min left"),
+         args=["keepwarm-due", "s-kw"], setup=_kw_setup(1200)),
+    Case("cache_clock", "keep-warm: off -> never", CLI, None, _due(False, "off"),
+         args=["keepwarm-due", "s-kw"], setup=_kw_setup(240, on=False)),
+    Case("cache_clock", "keep-warm: cold cache -> no ping", CLI, None, _due(False, "cold"),
+         args=["keepwarm-due", "s-kw"], setup=_kw_setup(240, cold=True)),
+    Case("cache_clock", "keep-warm: 8 pings -> stops", CLI, None, _due(False, "max 8"),
+         args=["keepwarm-due", "s-kw"], setup=_kw_setup(240, pings=8)),
+    Case("cache_clock", "keep-warm: ping cost logged, clock restarted", CLI, None, _kw_log_check,
+         args=["keepwarm-log", "s-kw", '{"cache_read_input_tokens": 40000, "input_tokens": 30, "output_tokens": 4}', "auto"],
+         setup=_kw_setup(240), env={**EMPTY_CLAUDE}),
+    Case("cache_clock", "/keepwarm on -> session flag + clock flag", CLI, None, _kw_on_check,
+         args=["keepwarm", "s-kw", "on"], setup=_kw_setup(1200, on=False)),
+    Case("cache_clock", "reply resets the ping budget", CLOCK, "stop_main.json", _kw_reset_check,
+         setup=_kw_reset_setup),
+)

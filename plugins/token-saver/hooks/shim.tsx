@@ -48,7 +48,7 @@ async function loadCard($: EngineInterface, toolUseId: string): Promise<TsCard |
 
 // ---------------------------------------------------------------- cache clock
 // Python's Stop hook writes cache/clock-<session>.json; this only formats it.
-export type ClockFile = { expires_at?: number; ttl_minutes?: number; context_tokens?: number | null }
+export type ClockFile = { expires_at?: number; ttl_minutes?: number; context_tokens?: number | null; keep_warm?: boolean }
 
 const WARN_S = 10 * 60
 
@@ -71,6 +71,25 @@ async function clockEnabled($: EngineInterface, home: string): Promise<boolean> 
   }
 }
 
+let pinging = false
+
+// One tool-less fork over the live transcript: it reads the main thread's cached
+// prefix, which restarts the cache's TTL (measured 2026-11-18, see API-NOTES).
+async function keepWarmPing($: EngineInterface, how: 'auto' | 'manual'): Promise<string> {
+  if (pinging) return 'ping already running'
+  pinging = true
+  try {
+    const fork = await $.model.fork({
+      prompt: 'Keep-warm ping from token-saver. Do not think it over and use no tools; reply with exactly: ok',
+    })
+    if (!fork.isAnswered) return `ping not sent: ${fork.reason}`
+    const r = await py($, ['keepwarm-log', await $.session.id(), JSON.stringify(fork.usage), how])
+    return r.text ?? 'ping sent'
+  } finally {
+    pinging = false
+  }
+}
+
 async function refreshClock($: EngineInterface): Promise<void> {
   try {
     const home = await stateHome($)
@@ -90,7 +109,14 @@ async function refreshClock($: EngineInterface): Promise<void> {
       } catch {
         // keep the file's figure
       }
-      text = clockLine(c, await $.clock.now())
+      const now = await $.clock.now()
+      text = clockLine(c, now)
+      // Keep Warm: only near expiry, and only when the clock file says it is on;
+      // Python decides (max pings, cold cache, mod off).
+      if (c?.keep_warm && typeof c.expires_at === 'number' && c.expires_at - now / 1000 <= 360) {
+        const due = (await py($, ['keepwarm-due', sid], 5000)) as PyAnswer & { due?: boolean }
+        if (due.due) await keepWarmPing($, 'auto')
+      }
     }
     $.ui.status(text)
   } catch {
@@ -266,12 +292,7 @@ export const register: Register = on => {
   on('command.run', { command: 'keepwarm' }, async ($, e) => {
     const sid = await $.session.id()
     const arg = e.args.trim()
-    if (arg === 'ping') {
-      const fork = await $.model.fork({ prompt: 'Keep-warm ping from token-saver. Reply with exactly: ok' })
-      if (!fork.isAnswered) return { text: `ping not sent: ${fork.reason}`, isTextDisplayOnly: true }
-      const r = await py($, ['keepwarm-log', sid, JSON.stringify(fork.usage)])
-      return { text: r.text ?? 'ping sent', isTextDisplayOnly: true }
-    }
+    if (arg === 'ping') return { text: await keepWarmPing($, 'manual'), isTextDisplayOnly: true }
     const r = await py($, ['keepwarm', sid, arg])
     return { text: r.text ?? `keepwarm failed: ${r.error ?? 'no answer'}`, isTextDisplayOnly: true }
   }).catch(() => ({ text: 'keepwarm failed (see ~/.claude/token-saver/debug.log).', isTextDisplayOnly: true }))
@@ -322,6 +343,16 @@ export const register: Register = on => {
     }
     return yield* next(e)
   })
+
+  // Keep Warm stops when its session ends (exit, /clear, resume elsewhere).
+  on('session.end', async ($, e, next) => {
+    try {
+      await py($, ['keepwarm', e.sessionId, 'off'], 3000)
+    } catch {
+      // fail open
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   // After a call a mod may act on, pick up the card file its hook wrote.
   on('tool.call', async ($, e, next) => {

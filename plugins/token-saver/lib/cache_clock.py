@@ -39,7 +39,7 @@ def read_clock(session: str | None) -> dict | None:
 
 def write_clock(session: str, last_activity: float, ttl_minutes: float,
                 context_tokens: int | None, source: str = "reply") -> dict:
-    d = {"session": session, "last_activity": round(last_activity, 3),
+    d = {"session": session, "keep_warm": keep_warm_on(session), "last_activity": round(last_activity, 3),
          "ttl_minutes": ttl_minutes, "expires_at": round(last_activity + ttl_minutes * 60, 3),
          "context_tokens": context_tokens, "source": source, "written": ts.now_iso()}
     ts._write_json_atomic(clock_path(session), d)
@@ -116,6 +116,10 @@ def on_stop(event: dict, cfg: dict) -> None:
         ts0 = turn_start(tpath)
     last = ts.last_usage(tpath)
     write_clock(sid, now, ttl, last["context_tokens"] if last else None)
+    st = ts.session_state(sid)
+    if st.get("keepwarm_pings"):
+        st["keepwarm_pings"] = 0            # you replied: a new idle stretch, a fresh ping budget
+        ts.save_session_state(sid, st)
 
     # Observed (not caused): did this turn start on a warm cache after a gap?
     if not prev:
@@ -140,3 +144,51 @@ def on_keepwarm_ping(session: str, usage: dict | None) -> None:
     prev = read_clock(session) or {}
     ttl = float(prev.get("ttl_minutes") or ts.load_config()["cache_clock"].get("ttl_minutes", 60))
     write_clock(session, time.time(), ttl, prev.get("context_tokens"), source="keepwarm")
+
+
+# ---------------------------------------------------------------- keep warm
+# Verified 2026-11-18: a tool-less $.model.fork 50 min after the last message
+# read the session's 40k-token prefix from cache, and the next real message at
+# +70 min read it again (40,492 cached); without the ping it rewrote 39,008.
+
+def keep_warm_on(session: str | None) -> bool:
+    cfg = ts.load_config().get("cache_clock", {})
+    flag = ts.session_state(session).get("keepwarm") if session else None
+    return bool(cfg.get("keep_warm", False) if flag is None else flag)
+
+
+def max_pings() -> int:
+    return int(ts.load_config().get("cache_clock", {}).get("keep_warm_max_pings", 8))
+
+
+def ping_due(session: str, now: float | None = None) -> tuple[bool, str]:
+    """Ping ~5 min before expiry (or at half the TTL when it is shorter),
+    never on a cold cache (that would rewrite it all), at most max_pings per idle stretch."""
+    if not ts.is_enabled("cache_clock", session) or not keep_warm_on(session):
+        return False, "keep-warm off"
+    c = read_clock(session)
+    if not c:
+        return False, "no reply yet"
+    now = now or time.time()
+    left = float(c["expires_at"]) - now
+    ttl_s = float(c.get("ttl_minutes", 60)) * 60
+    lead = min(300.0, ttl_s / 2)
+    if left <= 0:
+        return False, "cache already cold"
+    if left > lead:
+        return False, f"{int(left // 60)} min left"
+    n = int(ts.session_state(session).get("keepwarm_pings", 0))
+    if n >= max_pings():
+        return False, f"max {max_pings()} pings reached"
+    return True, f"{int(left)} s left, ping {n + 1} of {max_pings()}"
+
+
+def set_keep_warm(session: str, on: bool) -> None:
+    st = ts.session_state(session)
+    st["keepwarm"] = on
+    st["keepwarm_pings"] = 0
+    ts.save_session_state(session, st)
+    c = read_clock(session)
+    if c:                                   # refresh the flag the shim reads
+        c["keep_warm"] = on
+        ts._write_json_atomic(clock_path(session), c)
