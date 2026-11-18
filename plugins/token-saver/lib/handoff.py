@@ -20,7 +20,7 @@ WARN_STEP = 50_000
 SECTIONS = [
     "Goal", "Current state", "Decisions made (and why)", "Files", "Commands & environment",
     "Open problems", "Next steps", "Skills, MCP tools, links & docs used",
-    "Preferences the user showed this session",
+    "Preferences the user showed this session", "Ask the user first",
 ]
 
 PROMPT = """Write a handoff document so a fresh session with no memory of this conversation can continue the work without losing anything. It replaces this whole conversation, so it must be clearly better than a /compact summary.
@@ -45,6 +45,8 @@ Ordered, concrete, each one actionable on its own.
 Tools, docs, URLs and references that mattered.
 ## Preferences the user showed this session
 Style, constraints, things they asked for or against (verbatim where it matters).
+## Ask the user first
+Critical things that are unknown, unconfirmed or ambiguous and that the next session must confirm with the user BEFORE acting (a decision not yet made, a credential or path you don't have, a choice that changes the approach). One line each, phrased as a question. Write "Nothing critical." if there are none.
 
 Rules: be specific (exact names, paths, numbers, error strings); no vague phrases like "various files"; say "unknown" rather than guessing; keep secrets and API keys out of the document."""
 
@@ -63,11 +65,29 @@ def latest_path(cwd: str | None) -> str:
 
 # ---------------------------------------------------------------- save -----
 
+def prompt_with_notes(notes: str | None) -> str:
+    if not notes:
+        return PROMPT
+    return (PROMPT + "\n\nThe user added these notes for the next session. Take them into account "
+            "everywhere they matter (they are also inserted verbatim at the top of the document "
+            "for you, so do not repeat them as their own section):\n" + notes.strip())
+
+
+def _insert_notes(doc: str, notes: str | None) -> str:
+    if not notes or not notes.strip():
+        return doc
+    block = ("## Notes from the user (verbatim, critical)\n"
+             + "\n".join("> " + l for l in notes.strip().splitlines()) + "\n")
+    first, _, rest = doc.partition("\n")
+    return f"{first}\n\n{block}\n{rest.lstrip()}"
+
+
 def save(session: str | None, cwd: str | None, doc: str, context_tokens: int,
-         fork_usage: dict | None = None) -> str:
+         fork_usage: dict | None = None, notes: str | None = None) -> str:
     doc = (doc or "").strip()
     if not doc.startswith("#"):
         raise ValueError("model reply is not a markdown handoff document")
+    doc = _insert_notes(doc, notes)
     missing = [s for s in SECTIONS if f"## {s}".lower() not in doc.lower()]
     d = handoff_dir(cwd)
     os.makedirs(d, exist_ok=True)

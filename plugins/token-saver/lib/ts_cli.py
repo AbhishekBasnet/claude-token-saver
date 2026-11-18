@@ -5,8 +5,8 @@
   ts_cli.py mods    <session_id> <args as typed>
   ts_cli.py savings <session_id> <args as typed>
   ts_cli.py bypass  <session_id> <file_path>     next Read of this file is untouched
-  ts_cli.py handoff-prompt <session_id>           {"text": fork prompt} or ok=false if mod off
-  ts_cli.py handoff-save <session_id> <ctx_tokens> <usage_json>   (doc on stdin)
+  ts_cli.py handoff-prompt <session_id> [notes]   {"text": fork prompt} or ok=false if mod off
+  ts_cli.py handoff-save <session_id> <ctx_tokens> <usage_json> [notes]   (doc on stdin)
   ts_cli.py handoff-load <session_id>             {"text", "context"}
 
 Prints one JSON object: {"ok": bool, "text"?: str, "error"?: str}.
@@ -63,14 +63,15 @@ def main(argv):
         if cmd == "handoff-prompt":
             if not ts.is_enabled("handoff", session):
                 return {"ok": False, "text": "handoff is off (or mods are paused). /mods on handoff to use it."}
-            return {"ok": True, "text": handoff.PROMPT}
+            return {"ok": True, "text": handoff.prompt_with_notes(argv[2] if len(argv) > 2 else None)}
         if cmd == "handoff-save":
             try:
                 usage = json.loads(argv[3]) if len(argv) > 3 else {}
             except ValueError:
                 usage = {}
             try:
-                text = handoff.save(session, os.getcwd(), sys.stdin.read(), int(argv[2] or 0), usage)
+                text = handoff.save(session, os.getcwd(), sys.stdin.read(), int(argv[2] or 0), usage,
+                                    notes=argv[4] if len(argv) > 4 else None)
             except ValueError as e:
                 ts.record_error("handoff", e, session)
                 return {"ok": False, "text": f"handoff not saved: {e}"}

@@ -106,7 +106,22 @@ export const register: Register = on => {
       const r = await py($, ['handoff-load', sid])
       return { text: r.text ?? 'Could not load the handoff.', context: r.context ? [r.context] : undefined, isTextDisplayOnly: true }
     }
-    const p = await py($, ['handoff-prompt', sid])
+    // Ask for anything critical the next session must know (verbatim into the doc).
+    // `/handoff <notes>` skips the question; with no one to ask (-p, SDK) it is skipped.
+    let notes = e.args.trim()
+    if (!notes && e.origin?.kind === 'composer') {
+      try {
+        const a = await $.ui.ask('Anything critical the next session must know? Type it under Other.', {
+          header: 'Handoff',
+          options: ['Nothing to add', 'Cancel handoff'],
+        })
+        if (a === 'Cancel handoff') return { text: 'Handoff cancelled. Nothing was written.', isTextDisplayOnly: true }
+        if (a !== 'Nothing to add') notes = a.trim()
+      } catch {
+        return { text: 'Handoff cancelled. Nothing was written.', isTextDisplayOnly: true }
+      }
+    }
+    const p = await py($, ['handoff-prompt', sid, notes])
     if (!p.ok || !p.text) return { text: p.text ?? `handoff failed: ${p.error ?? 'no prompt'}`, isTextDisplayOnly: true }
     $.ui.status('token-saver: writing handoff document...')
     let fork
@@ -122,7 +137,7 @@ export const register: Register = on => {
       return { text: `Handoff not written: ${why}.`, isTextDisplayOnly: true }
     }
     const usage = await $.session.usage()
-    const s = await py($, ['handoff-save', sid, String(usage.context.tokens ?? 0), JSON.stringify(fork.usage)], 15000, fork.text)
+    const s = await py($, ['handoff-save', sid, String(usage.context.tokens ?? 0), JSON.stringify(fork.usage), notes], 15000, fork.text)
     return { text: s.text ?? `handoff not saved: ${s.error ?? 'no answer'}`, isTextDisplayOnly: true }
   }).catch(() => ({ text: 'Handoff failed (see ~/.claude/token-saver/debug.log). Nothing was changed.', isTextDisplayOnly: true }))
 

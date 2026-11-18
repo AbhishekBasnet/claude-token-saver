@@ -485,3 +485,35 @@ register(
     Case("handoff", "/handoff load returns context", "lib/ts_cli.py", None, _load_cli,
          args=["handoff-load", "s-handoff"], setup=_latest_setup(project=None)),
 )
+
+
+def _notes_check(out, home, p):
+    import handoff
+    d = in_home(home, handoff.handoff_dir, os.getcwd())
+    doc = open(os.path.join(d, "LATEST.md")).read()
+    i_title = doc.find("# Handoff")
+    i_notes = doc.find("## Notes from the user (verbatim, critical)")
+    i_goal = doc.find("## Goal")
+    if not (0 <= i_title < i_notes < i_goal):
+        return False, "notes section not placed right under the title"
+    if "> Prod DB password is in 1Password, never commit it" not in doc or "> Deadline Friday" not in doc:
+        return False, "notes not verbatim"
+    if "sections missing" in (out or {}).get("text", ""):
+        return False, "fixture has all sections incl. 'Ask the user first' but a warning was shown"
+    return True, ""
+
+
+def _prompt_notes(out, home, p):
+    t = (out or {}).get("text", "")
+    if "## Ask the user first" not in t or "Deadline Friday" not in t:
+        return False, "prompt lacks ask-first section or the user's notes"
+    return True, ""
+
+
+register(
+    Case("handoff", "user notes inserted verbatim under title", "lib/ts_cli.py", "handoff_doc.md", _notes_check,
+         args=["handoff-save", "s-handoff", "252000", "{}",
+               "Prod DB password is in 1Password, never commit it\nDeadline Friday"]),
+    Case("handoff", "prompt carries notes + ask-first section", "lib/ts_cli.py", None, _prompt_notes,
+         args=["handoff-prompt", "s-handoff", "Deadline Friday"]),
+)

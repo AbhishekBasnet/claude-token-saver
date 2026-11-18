@@ -88,3 +88,17 @@ test('/handoff with nothing to fork says so and saves nothing', async ($, on) =>
   expect(r.text).toContain('nothing to hand off')
   expect(calls.includes('handoff-save')).toBe(false)
 })
+
+test('/handoff <notes> passes the notes to the prompt and the save', async ($, on) => {
+  const calls: string[][] = []
+  on('process.run', (_, e) => {
+    calls.push([...e.argv])
+    return { value: { exitCode: 0, stdout: JSON.stringify({ ok: true, text: 'P' }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('model.fork', () => ({ value: { isAnswered: true, text: '# Handoff', usage: { input_tokens: 0, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 } } }))
+  on('session.id', () => ({ value: 's' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 1, window: 1 }, rateLimits: [] } }))
+  await $.command.run({ command: 'handoff', args: 'deadline Friday' })
+  expect(calls.find(c => c[2] === 'handoff-prompt')?.[4]).toBe('deadline Friday')
+  expect(calls.find(c => c[2] === 'handoff-save')?.[6]).toBe('deadline Friday')
+})

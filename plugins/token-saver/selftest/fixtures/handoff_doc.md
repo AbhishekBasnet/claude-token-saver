@@ -17,3 +17,5 @@ KeyError: 'id' in test_nested
 none
 ## Preferences the user showed this session
 No emoji.
+## Ask the user first
+Should a missing id default to None or raise ValueError?
