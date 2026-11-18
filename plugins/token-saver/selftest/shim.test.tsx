@@ -102,3 +102,42 @@ test('/handoff <notes> passes the notes to the prompt and the save', async ($, o
   expect(calls.find(c => c[2] === 'handoff-prompt')?.[4]).toBe('deadline Friday')
   expect(calls.find(c => c[2] === 'handoff-save')?.[6]).toBe('deadline Friday')
 })
+
+// ---------------------------------------------------------------- cache clock
+import { clockLine } from '../hooks/shim'
+
+test('clock line: full TTL, yellow at <= 10 min, then cold (faked timestamps)', () => {
+  const now = 1_800_000_000_000
+  const c = (minsLeft: number) => ({ expires_at: now / 1000 + minsLeft * 60, ttl_minutes: 60, context_tokens: 84_312 })
+  expect(clockLine(c(60), now)).toBe('● cache 60m · ctx 84k')
+  expect(clockLine(c(47), now)).toBe('● cache 47m · ctx 84k')
+  expect(clockLine(c(10), now)).toBe('◐ cache 10m · ctx 84k')
+  expect(clockLine(c(4), now)).toBe('◐ cache 4m · ctx 84k')
+  expect(clockLine(c(0.2), now)).toBe('◐ cache 1m · ctx 84k')
+  expect(clockLine(c(-1), now)).toBe('○ cold · ctx 84k')
+  expect(clockLine({ expires_at: now / 1000 + 600.5 }, now)).toBe('● cache 11m')
+  expect(clockLine(undefined, now)).toBeUndefined()
+})
+
+test('session start pins the clock line from the clock file; mod off clears it', async ($, on) => {
+  const statuses: (string | undefined)[] = []
+  let enabled = true
+  const now = 1_800_000_000_000
+  on('ui.status', (_, e) => { statuses.push(e.text); return { value: undefined } })
+  on('session.id', () => ({ value: 'sess-c' }))
+  on('clock.now', () => ({ value: now }))
+  on('fs.read', (_, e) => {
+    if (e.path.endsWith('/config.json')) return { value: JSON.stringify({ cache_clock: { enabled } }) }
+    if (e.path.endsWith('/cache/clock-sess-c.json')) return { value: JSON.stringify({ expires_at: now / 1000 + 4 * 60, context_tokens: 120_000 }) }
+    throw new Error('ENOENT')
+  })
+  on('process.run', () => ({ value: { exitCode: 0, stdout: '{"ok":true}', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('clock.every', () => ({ value: undefined })) // no periods in the test: the first refresh is immediate
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(statuses[statuses.length - 1]).toBe('◐ cache 4m · ctx 120k')
+  enabled = false
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(statuses[statuses.length - 1]).toBeUndefined()
+})

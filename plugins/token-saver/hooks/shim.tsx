@@ -2,6 +2,7 @@
 // logic; it does what only a mod can do and asks the Python side the rest:
 //   - /mods and /savings answered with no model turn (display-only text)
 //   - the info card under a tool row when a mod acted on that call
+//   - Cache Clock: a pinned status line from the clock file the Stop hook writes
 // Fail open everywhere: on any error the event passes through unchanged.
 import { memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -43,6 +44,58 @@ async function loadCard($: EngineInterface, toolUseId: string): Promise<TsCard |
   }
 }
 
+// ---------------------------------------------------------------- cache clock
+// Python's Stop hook writes cache/clock-<session>.json; this only formats it.
+export type ClockFile = { expires_at?: number; ttl_minutes?: number; context_tokens?: number | null }
+
+const WARN_S = 10 * 60
+
+export function clockLine(c: ClockFile | undefined, nowMs: number): string | undefined {
+  if (!c || typeof c.expires_at !== 'number') return undefined
+  const left = c.expires_at - nowMs / 1000
+  const ctx = typeof c.context_tokens === 'number' && c.context_tokens > 0
+    ? ` · ctx ${Math.round(c.context_tokens / 1000)}k` : ''
+  if (left <= 0) return `○ cold${ctx}`
+  const mins = Math.max(1, Math.ceil(left / 60))
+  return `${left > WARN_S ? '●' : '◐'} cache ${mins}m${ctx}`
+}
+
+async function clockEnabled($: EngineInterface, home: string): Promise<boolean> {
+  try {
+    const cfg = JSON.parse(String(await $.fs.read(`${home}/config.json`)))
+    return cfg?.cache_clock?.enabled !== false
+  } catch {
+    return true // no config yet: defaults have the clock on
+  }
+}
+
+async function refreshClock($: EngineInterface): Promise<void> {
+  try {
+    const home = await stateHome($)
+    let text: string | undefined
+    if (await clockEnabled($, home)) {
+      const sid = (await $.session.id()).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80)
+      let c: ClockFile | undefined
+      try {
+        c = JSON.parse(String(await $.fs.read(`${home}/cache/clock-${sid}.json`))) as ClockFile
+      } catch {
+        c = undefined // no reply yet in this session
+      }
+      // The live context size beats the file's (the transcript can lag the Stop hook).
+      try {
+        const live = (await $.session.usage()).context.tokens
+        if (c && typeof live === 'number' && live > 0) c = { ...c, context_tokens: live }
+      } catch {
+        // keep the file's figure
+      }
+      text = clockLine(c, await $.clock.now())
+    }
+    $.ui.status(text)
+  } catch {
+    // fail open: a missing clock line is fine
+  }
+}
+
 const DEMO: TsCard = {
   mod: 'demo',
   title: 'input router (demo card)',
@@ -80,6 +133,15 @@ export const register: Register = on => {
       }
     } catch {
       // fail open: commands missing is better than a broken session
+    }
+    try {
+      if ((await $.env.get('TOKEN_SAVER_INNER')) !== '1') {
+        // A hot reload stops the old copy's timer, so one timer per loaded copy.
+        $.clock.every(30000, () => refreshClock($))
+        await refreshClock($)
+      }
+    } catch {
+      // fail open: no clock line
     }
     return next(e)
   })

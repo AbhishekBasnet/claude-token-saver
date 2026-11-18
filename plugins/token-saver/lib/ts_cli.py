@@ -8,6 +8,7 @@
   ts_cli.py handoff-prompt <session_id> [notes]   {"text": fork prompt} or ok=false if mod off
   ts_cli.py handoff-save <session_id> <ctx_tokens> <usage_json> [notes]   (doc on stdin)
   ts_cli.py handoff-load <session_id>             {"text", "context"}
+  ts_cli.py keepwarm-log <session_id> <usage_json>  log a ping, restart the clock
 
 Prints one JSON object: {"ok": bool, "text"?: str, "error"?: str}.
 Never raises (fail open).
@@ -90,6 +91,8 @@ def main(argv):
         st["keepwarm_pings"] = int(st.get("keepwarm_pings", 0)) + 1
         if session:
             ts.save_session_state(session, st)
+            import cache_clock
+            cache_clock.on_keepwarm_ping(session, u)
         return {"ok": True, "text": (f"keep-warm ping: {u.get('cache_read_input_tokens', 0):,} tokens read from cache, "
                                      f"{u.get('input_tokens', 0):,} uncached, {u.get('cache_creation_input_tokens', 0):,} written, "
                                      f"{u.get('output_tokens', 0):,} out")}

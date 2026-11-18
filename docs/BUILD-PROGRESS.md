@@ -8,7 +8,7 @@ Written 2026-11-18 at the end of the first build session. This is the backup if 
 - Fedora 45 KDE, Claude subscription (no API key). Python stdlib only, and give a `dnf` command instead of installing anything. User scope install. Fail open.
 - **No emoji anywhere** in mod output. Use plain prefixes (`token-saver:`, `doctor:`, `handoff:`).
 - **README:** only numbers that were actually measured.
-- **Commits:** author is `Claude <noreply@anthropic.com>` (repo-local git config, already set), and every message ends with the line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The user asked for "only your tags, not mine", which overrides their global CLAUDE.md for this repo.
+- **Commits:** author is `Claude <noreply@anthropic.com>` (repo-local git config). Short one-line messages, **no `Co-Authored-By` line** (user, 2026-11-18, session 2; replaces the earlier rule).
 - **GitHub repo:** must be **private** (step 8).
 - **Info card:** when a mod acts on a tool call, show the card under that tool row (built in step 1; `write_card()` in Python, drawn by the shim).
 
@@ -28,10 +28,9 @@ Tests: `python3 tests/run_selftest.py` (38/38) and `claude plugin test plugins/t
 - **Keep Warm experiment running in the background** (started 13:17:04, results around 14:27): `~/.claude/token-saver/cache/keepwarm-exp/result-A.json` (ping at +50 min) and `result-B.json` (control). Both msg1 results: cache_read 9,224 (shared system prompt), cache_write about 38.9k (unique text).
   - If A's "msg2 (+70 min)" shows cache_read ≈ 48k and B's ≈ 9k, the ping refreshes the cache. Then build Keep Warm (timer about 5 min before expiry, max 8 pings, configurable, stops at session end, logs each ping's cost).
   - If not, don't build it. Explain why in the README.
-- **Still to build:**
-  - The clock: shim `$.ui.status` pinned line refreshed by `$.clock.every(30000)`, from `last_activity` written by a Python Stop hook to `cache/clock-<session>.json`. TTL comes from `cache_clock.ttl_minutes` (60 is verified on this subscription; usage shows `ephemeral_1h`).
-  - `$.ui.status` is plain text with no colour, so the state is shown with symbols: `● cache 47m · ctx 84k`, `◐ cache 4m`, `○ cold`.
-  - Planned honesty fix: log warm-cache hits after a gap of more than 10 min as *observed* (the clock doesn't cause them), not as savings.
+- **Clock: built (session 2, not yet committed: the auto-mode classifier blocked the commit).** `lib/cache_clock.py`, `hooks/cache_clock_stop.py`, shim `refreshClock`/`clockLine` (30 s `$.clock.every`, started in its own try so a command-registration failure can't hide it). Live context from `$.session.usage()`. Warm hits after a >10 min gap are logged with `kind: observed` and no before/after (shown as n/a). `/keepwarm ping` restarts the clock. Tests: self-test 45/45, engine 8/8. Live: the clock file had ctx 22,660, which equals the API usage, and a 60 min TTL.
+  - Big transcripts: a 61 MB synthetic one read in 0 ms (last usage) and 8 ms (turn start). A turn with more than 4 MB of tool output skips the observed-hit note (harmless). Add this to the README's Known limitations.
+  - Gotcha: the reply's usage can reach the transcript **after** Stop fires. `on_stop` polls up to 1 s.
 - The spec 03 savings formula needs the cache-read/input price ratio. For Opus 5.5 it's 0.20/4.00 = 0.05 (prices in `lib/switchboard.py`).
 
 ## Remaining steps

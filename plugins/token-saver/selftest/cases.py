@@ -517,3 +517,113 @@ register(
     Case("handoff", "prompt carries notes + ask-first section", "lib/ts_cli.py", None, _prompt_notes,
          args=["handoff-prompt", "s-handoff", "Deadline Friday"]),
 )
+
+
+# ---------------------------------------------------------------- cache clock
+CLOCK = "hooks/cache_clock_stop.py"
+
+
+def _clock_transcript(gap_min=None, cache_read=48_000):
+    """A transcript whose latest human prompt came gap_min after a previous
+    clock file's last_activity, and whose first reply read cache_read tokens."""
+    def setup(home):
+        now = _time.time()
+        prompt_t = now - 5
+        ts_iso = _time.strftime("%Y-%m-%dT%H:%M:%S.000Z", _time.gmtime(prompt_t))
+        rows = [
+            {"type": "user", "timestamp": ts_iso, "origin": {"kind": "human"},
+             "message": {"role": "user", "content": "next question"}},
+            {"type": "assistant", "timestamp": ts_iso, "message": {"role": "assistant", "content": [{"type": "text", "text": "ok"}],
+             "usage": {"input_tokens": 12, "cache_read_input_tokens": cache_read, "cache_creation_input_tokens": 300,
+                       "output_tokens": 40}}},
+        ]
+        with open(os.path.join(home, "transcript.jsonl"), "w") as f:
+            for r in rows:
+                f.write(_json.dumps(r) + "\n")
+        if gap_min is not None:
+            os.makedirs(os.path.join(home, "cache"), exist_ok=True)
+            with open(os.path.join(home, "cache", "clock-s-handoff.json"), "w") as f:
+                _json.dump({"session": "s-handoff", "last_activity": prompt_t - gap_min * 60,
+                            "ttl_minutes": 60, "expires_at": prompt_t - gap_min * 60 + 3600}, f)
+    return setup
+
+
+def _clock_written(out, home, p):
+    c = read_json(home, "cache/clock-s-handoff.json")
+    if not c:
+        return False, "clock file not written"
+    left = c["expires_at"] - _time.time()
+    if not (3590 <= left <= 3600) or c["context_tokens"] != 48_312:
+        return False, f"expected full 60 min TTL and ctx 48,312, got {left:.0f}s / {c.get('context_tokens')}"
+    if out is not None:
+        return False, f"Stop hook must be silent, got {out}"
+    return True, ""
+
+
+def _observed(expect):
+    def check(out, home, p):
+        rows = [r for r in read_jsonl(home, "savings.jsonl") if r.get("mod") == "cache_clock"]
+        if not expect:
+            return (not rows, f"expected no entry, got {rows}")
+        if len(rows) != 1:
+            return False, f"expected one observed entry, got {rows}"
+        r = rows[0]
+        if r.get("kind") != "observed" or r.get("observed_tokens") != 48_000 \
+                or r.get("tokens_before") is not None or r.get("tokens_after") is not None:
+            return False, f"entry must be observed-only (no before/after): {r}"
+        return True, ""
+    return check
+
+
+def _clock_off_setup(home):
+    _clock_transcript()(home)
+    import token_saver_common as T
+    cfg = in_home(home, T.load_config)
+    cfg["cache_clock"]["enabled"] = False
+    in_home(home, T.save_config, cfg)
+
+
+def _clock_absent(out, home, p):
+    if read_json(home, "cache/clock-s-handoff.json") or read_json(home, "cache/clock-s-sub.json"):
+        return False, "clock file written when it should not be"
+    return True, ""
+
+
+def _ping_restarts(out, home, p):
+    c = read_json(home, "cache/clock-s-handoff.json")
+    if not c or c.get("source") != "keepwarm" or c["expires_at"] - _time.time() < 3590:
+        return False, f"ping did not restart the clock: {c}"
+    if c.get("context_tokens") != 48_312:
+        return False, "ping lost the context size"
+    return True, ""
+
+
+
+register(
+    Case("cache_clock", "Stop -> clock file with full TTL + ctx", CLOCK, "stop_main.json", _clock_written,
+         setup=_clock_transcript(), max_ms=300),
+    Case("cache_clock", "warm hit after 25 min gap -> observed, not saved", CLOCK, "stop_main.json",
+         _observed(True), setup=_clock_transcript(gap_min=25)),
+    Case("cache_clock", "gap under 10 min -> nothing logged", CLOCK, "stop_main.json",
+         _observed(False), setup=_clock_transcript(gap_min=4)),
+    Case("cache_clock", "gap past TTL (cold) -> nothing logged", CLOCK, "stop_main.json",
+         _observed(False), setup=_clock_transcript(gap_min=75)),
+    Case("cache_clock", "mod off -> no clock file", CLOCK, "stop_main.json", _clock_absent,
+         setup=_clock_off_setup),
+    Case("cache_clock", "sub-agent Stop -> ignored", CLOCK, "stop_subagent.json", _clock_absent,
+         setup=_clock_transcript()),
+)
+
+
+def _ping_setup_ctx(home):
+    _clock_transcript(gap_min=55)(home)
+    p = os.path.join(home, "cache", "clock-s-handoff.json")
+    c = _json.load(open(p))
+    c["context_tokens"] = 48_312
+    _json.dump(c, open(p, "w"))
+
+
+register(
+    Case("cache_clock", "keep-warm ping restarts the clock", "lib/ts_cli.py", None, _ping_restarts,
+         args=["keepwarm-log", "s-handoff", '{"cache_read_input_tokens": 48000}'], setup=_ping_setup_ctx),
+)
