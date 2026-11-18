@@ -19,7 +19,7 @@ INNER_ENV = "TOKEN_SAVER_INNER"
 
 DEFAULT_CONFIG = {
     "input_router": {"enabled": True, "threshold_tokens": 2000, "model": "haiku"},
-    "effort_optimizer": {"enabled": True, "model": "sonnet", "mode": "suggest"},
+    "effort_optimizer": {"enabled": True, "model": "haiku", "mode": "suggest"},
     "subagent_router": {"enabled": True, "allow_opus": True, "classifier_model": "haiku"},
     "cache_clock": {"enabled": True, "ttl_minutes": 60, "keep_warm": False},
     "handoff": {"enabled": True, "threshold_tokens": 250000},

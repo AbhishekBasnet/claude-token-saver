@@ -914,3 +914,108 @@ register(
     Case("input_router", "MCP result: pre-clean, digest, raw saved", IR, "{home}/post_mcp_filled.json", _mcp_check,
          setup=_mcp_setup),
 )
+
+
+# ---------------------------------------------------------------- effort optimizer
+# Two steps, as the shim runs them: effort-check (at submit: heuristics, or "ask"
+# Haiku), then effort-decide (once the current level is known).
+CLI = "lib/ts_cli.py"
+
+
+def _classified(level):
+    def check(out, home, p):
+        c = (out or {}).get("classification") or {}
+        if (out or {}).get("action") != "classified" or c.get("recommended") != level or c.get("confidence", 0) < 0.7:
+            return False, f"expected classification {level}, got {out}"
+        return True, ""
+    return check
+
+
+def _suggests(level, current):
+    def check(out, home, p):
+        a = out or {}
+        if f"Run /effort {level}" not in (a.get("text") or "") or f"effort is {current}" not in a["text"] or a.get("apply"):
+            return False, f"expected a suggestion {current} -> {level}, got {a}"
+        return True, ""
+    return check
+
+
+def _nothing(out, home, p):
+    a = out or {}
+    if a.get("text") or a.get("apply") or a.get("action") not in ("none", "done"):
+        return False, f"expected nothing shown, got {a}"
+    return True, ""
+
+
+def _asks_model(out, home, p):
+    a = out or {}
+    if a.get("action") != "ask" or a.get("model") != "haiku" or "Current effort: high" not in a.get("prompt", "") \
+            or "sort it out" not in a.get("prompt", ""):
+        return False, f"expected a Haiku prompt with the current level, got {str(a)[:200]}"
+    return True, ""
+
+
+def _eo_dup_setup(home):
+    run_script(home, CLI, "effort_low.json", args=["effort-decide", "s-eo", "high"])
+
+
+def _eo_cfg(**kw):
+    def setup(home):
+        import token_saver_common as T
+        cfg = in_home(home, T.load_config)
+        cfg["effort_optimizer"].update(kw)
+        in_home(home, T.save_config, cfg)
+    return setup
+
+
+def _eo_auto(out, home, p):
+    a = out or {}
+    if a.get("apply") != "low" or "effort high -> low" not in (a.get("text") or ""):
+        return False, f"expected auto apply low, got {a}"
+    rows = [r for r in read_jsonl(home, "savings.jsonl") if r.get("mod") == "effort_optimizer"]
+    if len(rows) != 1 or rows[0].get("kind") != "effort_lowered" or rows[0].get("tokens_before") is not None:
+        return False, f"lowering not logged (tokens n/a): {rows}"
+    return True, ""
+
+
+def _eo_auto_twice_setup(home):
+    _eo_cfg(mode="auto")(home)
+    run_script(home, CLI, "effort_low.json", args=["effort-decide", "s-eo", "high"])
+
+
+def _eo_auto_again(out, home, p):
+    if (out or {}).get("apply") != "low":
+        return False, f"second high->low change not applied in auto mode: {out}"
+    return True, ""
+
+
+register(
+    Case("effort_optimizer", '"rename ... userId" -> classified low (free)', CLI, "prompt_rename.txt",
+         _classified("low"), args=["effort-check", "s-eo", "high"], max_ms=400),
+    Case("effort_optimizer", '"rename" on high -> suggests low', CLI, "effort_low.json",
+         _suggests("low", "high"), args=["effort-decide", "s-eo", "high"]),
+    Case("effort_optimizer", '"design the CI/CD ... k8s" -> classified high', CLI, "prompt_cicd.txt",
+         _classified("high"), args=["effort-check", "s-eo", "low"]),
+    Case("effort_optimizer", '"CI/CD" on low -> suggests high', CLI, "effort_high.json",
+         _suggests("high", "low"), args=["effort-decide", "s-eo", "low"]),
+    Case("effort_optimizer", '"thanks" -> no model call, nothing shown', CLI, "prompt_thanks.txt", _nothing,
+         args=["effort-check", "s-eo", "high"]),
+    Case("effort_optimizer", "already on the right level -> nothing", CLI, "effort_low.json", _nothing,
+         args=["effort-decide", "s-eo", "low"]),
+    Case("effort_optimizer", "unclear -> asks Haiku (in background)", CLI, "prompt_unclear.txt", _asks_model,
+         args=["effort-check", "s-eo", "high"]),
+    Case("effort_optimizer", "Haiku reply parsed", CLI, "model_effort_low.json", _classified("low"),
+         args=["effort-model", "s-eo"]),
+    Case("effort_optimizer", "confidence < 0.7 -> nothing", CLI, "model_effort_unsure.json", _nothing,
+         args=["effort-decide", "s-eo", "high"]),
+    Case("effort_optimizer", "current level unknown -> nothing", CLI, "effort_low.json", _nothing,
+         args=["effort-decide", "s-eo", ""]),
+    Case("effort_optimizer", "same suggestion twice in a row -> once", CLI, "effort_low.json", _nothing,
+         args=["effort-decide", "s-eo", "high"], setup=_eo_dup_setup),
+    Case("effort_optimizer", "auto mode -> applies, logs lowering", CLI, "effort_low.json", _eo_auto,
+         args=["effort-decide", "s-eo", "high"], setup=_eo_cfg(mode="auto")),
+    Case("effort_optimizer", "auto mode: same change twice -> applied again", CLI, "effort_low.json", _eo_auto_again,
+         args=["effort-decide", "s-eo", "high"], setup=_eo_auto_twice_setup),
+    Case("effort_optimizer", "mod off -> nothing", CLI, "prompt_rename.txt", _nothing,
+         args=["effort-check", "s-eo", "high"], setup=_eo_cfg(enabled=False)),
+)

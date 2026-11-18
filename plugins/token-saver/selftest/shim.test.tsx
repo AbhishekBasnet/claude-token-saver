@@ -141,3 +141,59 @@ test('session start pins the clock line from the clock file; mod off clears it',
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(statuses[statuses.length - 1]).toBeUndefined()
 })
+
+// ---------------------------------------------------------------- effort optimizer
+const PROC = (stdout: unknown) => ({ value: { exitCode: 0, stdout: JSON.stringify(stdout), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+const STEP = { turnId: 't1', index: 0, model: 'claude-opus-5-5', effort: 'high' as const, messageCount: 3 }
+
+async function drain(s: AsyncIterable<unknown>) {
+  for await (const _ of s) { /* read to the end */ }
+}
+
+function effortKit(on: any, mode: 'suggest' | 'auto', answer: unknown) {
+  const toasts: string[] = []
+  const sent: unknown[] = []
+  let toasted: () => void = () => {}
+  const toastSeen = new Promise<void>(r => { toasted = r })
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'HOME' ? '/home/u' : undefined }))
+  on('session.id', () => ({ value: 'sess-e' }))
+  on('fs.read', (_: unknown, e: { path: string }) => {
+    if (e.path.endsWith('/config.json')) return { value: JSON.stringify({ effort_optimizer: { enabled: true, mode } }) }
+    throw new Error('ENOENT')
+  })
+  on('process.run', (_: unknown, e: { argv: string[] }) =>
+    e.argv[2] === 'effort-check'
+      ? PROC({ ok: true, action: 'classified', classification: { recommended: 'low', confidence: 0.8, reason: '"rename"' } })
+      : e.argv[2] === 'effort-decide' ? PROC(answer) : PROC({ ok: true }))
+  on('ui.toast', (_: unknown, e: { text: string }) => { toasts.push(e.text); toasted(); return { value: undefined } })
+  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('turn.step', async function* (_: unknown, e: { effort?: string; turnId: string; index: number }) {
+    sent.push(e.effort)
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [] }
+  })
+  return { toasts, sent, toastSeen }
+}
+
+test('effort: suggest mode shows a toast and never changes or delays the request', async ($, on) => {
+  const k = effortKit(on, 'suggest', { ok: true, action: 'done', text: 'token-saver: effort is high; this looks like a low task ("rename"). Run /effort low to switch.' })
+  await $.prompt.submit({ text: 'rename this variable to userId' })
+  await drain($.turn.step(STEP))
+  expect(k.sent).toEqual(['high'])
+  await k.toastSeen
+  expect(k.toasts[0]).toContain('Run /effort low')
+})
+
+test('effort: auto mode applies the chosen level to the request', async ($, on) => {
+  const k = effortKit(on, 'auto', { ok: true, action: 'done', apply: 'low', text: 'token-saver: effort high -> low for this prompt ("rename").' })
+  await $.prompt.submit({ text: 'rename this variable to userId' })
+  await drain($.turn.step(STEP))
+  await drain($.turn.step({ ...STEP, index: 1 }))
+  expect(k.sent).toEqual(['low', 'low'])
+})
+
+test('effort: a sub-agent request is never touched', async ($, on) => {
+  const k = effortKit(on, 'auto', { ok: true, action: 'done', apply: 'low' })
+  await $.prompt.submit({ text: 'rename this variable to userId' })
+  await drain($.turn.step({ ...STEP, agentId: 'a1' }))
+  expect(k.sent).toEqual(['high'])
+})

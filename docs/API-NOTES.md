@@ -192,3 +192,18 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
   - Every run answered correctly. With the router, Claude used the digest's line ranges to Read the exact lines with offset/limit.
   - $ per run varied from $0.024 to $0.136 with cache state, so tokens are the fair measure.
 - MCP live: a 60-issue result (~11k tokens est.) became a 275-315 token digest. 3 turns, correct answer. The free pre-clean removed 8% in that test.
+
+## 17. Verified in step 7: Effort Optimizer (2026-11-18)
+- User decisions:
+  - free heuristics first; Haiku via the shim's `$.model.complete` only when they are unclear;
+  - runs in the background and never blocks the prompt; the suggestion shows as a toast;
+  - auto mode built, off by default (`/mods set effort_optimizer.mode auto`).
+- `/effort <low|medium|high|xhigh|max|auto>` exists (0 turns, $0).
+- The current level is known only from `turn.step` (`e.effort`). On a session's first prompt it is unknown at submit time, so classification starts at submit and the decision waits for the first request. Auto mode waits at most 5 s at that first request, then rewrites `effort` on every request of the turn (a rewrite lasts one step). Sub-agent requests (`e.agentId`) are never touched.
+- Live: a session at `--effort high` sent all 6 requests of a rename turn at `low` (transcript `effort` field).
+- Cache: within one session, switching back to high after a low turn wrote only 127 cache tokens, so per-request effort does not rewrite the conversation. A **new** session at a different level does write its own cache entry (11k vs 0 on an identical rerun).
+- Measured, honestly: no saving on these small tasks.
+  - Rename alone: 667-669 output tokens at low vs 700-731 at high.
+  - 4-prompt session (rename, CI/CD design, typo, thanks): $0.1050 with auto vs $0.1049 with mods off.
+  - The README must not claim an effort saving.
+- Bug found live and fixed: the "never repeat a suggestion" rule also blocked auto mode's second high->low change. It now applies only to suggest mode.

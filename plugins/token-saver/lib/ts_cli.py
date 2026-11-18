@@ -9,6 +9,9 @@
   ts_cli.py handoff-save <session_id> <ctx_tokens> <usage_json> [notes]   (doc on stdin)
   ts_cli.py handoff-load <session_id>             {"text", "context"}
   ts_cli.py keepwarm-log <session_id> <usage_json>  log a ping, restart the clock
+  ts_cli.py effort-check  <session_id> [current]  (prompt on stdin) {"action": none|ask|classified}
+  ts_cli.py effort-model  <session_id>            (Haiku reply on stdin) {"action": none|classified}
+  ts_cli.py effort-decide <session_id> <current>  (classification on stdin) {"text"?, "apply"?}
 
 Prints one JSON object: {"ok": bool, "text"?: str, "error"?: str}.
 Never raises (fail open).
@@ -27,6 +30,16 @@ def _split(s: str) -> list:
         return shlex.split(s)
     except ValueError:
         return s.split()
+
+
+def _transcript_for(session):
+    """This session's transcript: ~/.claude/projects/<cwd slug>/<session>.jsonl."""
+    if not session:
+        return None
+    import handoff
+    tdir = os.environ.get("TOKEN_SAVER_PROJECTS_DIR") or os.path.join(os.path.expanduser("~"), ".claude", "projects")
+    p = os.path.join(tdir, handoff.project_slug(os.getcwd()), f"{session}.jsonl")
+    return p if os.path.exists(p) else None
 
 
 def main(argv):
@@ -96,6 +109,37 @@ def main(argv):
         return {"ok": True, "text": (f"keep-warm ping: {u.get('cache_read_input_tokens', 0):,} tokens read from cache, "
                                      f"{u.get('input_tokens', 0):,} uncached, {u.get('cache_creation_input_tokens', 0):,} written, "
                                      f"{u.get('output_tokens', 0):,} out")}
+    if cmd in ("effort-check", "effort-model", "effort-decide"):
+        # check: prompt on stdin -> classification, or "ask" (shim asks Haiku)
+        # model: Haiku's reply on stdin -> classification
+        # decide <current>: classification JSON on stdin -> text / apply (needs the current level)
+        import effort_optimizer as eo
+        session = argv[1] if len(argv) > 1 and argv[1] else None
+        cfg = ts.load_config().get("effort_optimizer", {})
+        if not ts.is_enabled("effort_optimizer", session):
+            return {"ok": True, "action": "none"}
+        mode = cfg.get("mode", "suggest")
+        if cmd == "effort-decide":
+            current = argv[2] if len(argv) > 2 and argv[2] else None
+            try:
+                c = json.loads(sys.stdin.read() or "{}")
+            except ValueError:
+                c = {}
+            return {"ok": True, "action": "done", "current": current, "mode": mode, **eo.decide(session, current, c, mode)}
+        if cmd == "effort-check":
+            prompt = sys.stdin.read()
+            c = eo.heuristic(prompt)
+            if c.get("skip"):
+                return {"ok": True, "action": "none"}
+            if c.get("unclear"):
+                cur = argv[2] if len(argv) > 2 and argv[2] else None
+                return {"ok": True, "action": "ask", "model": cfg.get("model", "haiku"), "system": eo.CLASSIFY_SYSTEM,
+                        "prompt": eo.model_prompt(prompt, cur, _transcript_for(session))}
+        else:
+            c = eo.parse_model(sys.stdin.read())
+            if not c:
+                return {"ok": True, "action": "none"}
+        return {"ok": True, "action": "classified", "mode": mode, "classification": c}
     if cmd == "keepwarm":
         return {"ok": True, "text": "keep-warm is under investigation (build step 4); only /keepwarm ping works for now."}
     return {"ok": False, "error": f"unknown command {cmd!r}"}

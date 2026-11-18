@@ -1,0 +1,1 @@
+design the CI/CD pipeline and k8s manifests for this repo

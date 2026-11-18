@@ -3,6 +3,8 @@
 //   - /mods and /savings answered with no model turn (display-only text)
 //   - the info card under a tool row when a mod acted on that call
 //   - Cache Clock: a pinned status line from the clock file the Stop hook writes
+//   - Effort Optimizer: classify each prompt in the background (never blocks it),
+//     suggest by toast; in auto mode set the level on each request of that turn
 // Fail open everywhere: on any error the event passes through unchanged.
 import { memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
@@ -93,6 +95,57 @@ async function refreshClock($: EngineInterface): Promise<void> {
     $.ui.status(text)
   } catch {
     // fail open: a missing clock line is fine
+  }
+}
+
+// ---------------------------------------------------------------- effort optimizer
+type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+const EFFORTS: readonly string[] = ['low', 'medium', 'high', 'xhigh', 'max']
+let lastEffort: string | undefined          // the main thread's level, seen at turn.step
+let effortKnown: (level: string) => void = () => {}
+let effortSeen = new Promise<string>(r => { effortKnown = r })
+let pending: { mode: string; job: Promise<Classified | undefined> } | undefined
+let autoTarget: Effort | undefined
+
+type Classified = Record<string, unknown> & { recommended?: string }
+type EffortAnswer = PyAnswer & { action?: 'none' | 'ask' | 'classified' | 'done'; model?: string; system?: string; prompt?: string; classification?: Classified; apply?: string }
+
+async function effortMode($: EngineInterface): Promise<string | undefined> {
+  try {
+    const cfg = JSON.parse(String(await $.fs.read(`${await stateHome($)}/config.json`)))
+    const eo = cfg?.effort_optimizer
+    return eo?.enabled === false ? undefined : String(eo?.mode ?? 'suggest')
+  } catch {
+    return 'suggest'
+  }
+}
+
+// Step 1, as soon as the prompt is submitted: Python's heuristics, and Haiku on
+// the session's own client only when Python asks for it.
+export async function classifyEffort($: EngineInterface, text: string): Promise<Classified | undefined> {
+  try {
+    const sid = await $.session.id()
+    let c = (await py($, ['effort-check', sid, lastEffort ?? ''], 10000, text)) as EffortAnswer
+    if (c.action === 'ask' && c.prompt) {
+      const m = await $.model.complete({ model: c.model ?? 'haiku', system: c.system, prompt: c.prompt, maxTokens: 200, timeoutMs: 15000 })
+      if (!m.isAnswered) return undefined
+      c = (await py($, ['effort-model', sid], 10000, m.text)) as EffortAnswer
+    }
+    return c.action === 'classified' ? c.classification : undefined
+  } catch {
+    return undefined // fail open: no suggestion
+  }
+}
+
+// Step 2, once the current level is known: Python decides (threshold, dedupe,
+// logging); the shim shows the line and, in auto mode, returns the level to use.
+async function decideEffort($: EngineInterface, c: Classified, current: string): Promise<Effort | undefined> {
+  try {
+    const d = (await py($, ['effort-decide', await $.session.id(), current], 10000, JSON.stringify(c))) as EffortAnswer
+    if (d.text) $.ui.toast(d.text, { timeoutMs: 12000 })
+    return d.apply && EFFORTS.includes(d.apply) ? (d.apply as Effort) : undefined
+  } catch {
+    return undefined
   }
 }
 
@@ -222,6 +275,53 @@ export const register: Register = on => {
     const r = await py($, ['keepwarm', sid, arg])
     return { text: r.text ?? `keepwarm failed: ${r.error ?? 'no answer'}`, isTextDisplayOnly: true }
   }).catch(() => ({ text: 'keepwarm failed (see ~/.claude/token-saver/debug.log).', isTextDisplayOnly: true }))
+
+  // Effort Optimizer: start classifying once the prompt is submitted; never wait on it here.
+  on('prompt.submit', async ($, e, next) => {
+    try {
+      autoTarget = undefined
+      pending = undefined
+      if (!e.command && !e.isMeta && (await $.env.get('TOKEN_SAVER_INNER')) !== '1') {
+        const mode = await effortMode($)
+        if (mode) {
+          const job = classifyEffort($, e.text)
+          pending = { mode, job }
+          if (mode !== 'auto') {
+            // Suggest: decide in the background once the level is known (first request).
+            void (async () => {
+              const c = await job
+              if (!c) return
+              const cur = lastEffort ?? (await Promise.race([effortSeen, $.clock.sleep(120000).then(() => undefined)]))
+              if (cur) await decideEffort($, c, cur)
+            })().catch(() => undefined)
+          }
+        }
+      }
+    } catch {
+      // fail open
+    }
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Track the main thread's effort; in auto mode, decide at the turn's first request
+  // and apply the level to every request of the turn (a rewrite lasts one step).
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e)
+    if (typeof e.effort === 'string') {
+      lastEffort = e.effort
+      effortKnown(e.effort)
+    }
+    if (pending?.mode === 'auto' && typeof e.effort === 'string') {
+      const job = pending.job
+      pending = undefined
+      const c = await Promise.race([job, $.clock.sleep(5000).then(() => undefined)]).catch(() => undefined)
+      autoTarget = c ? await decideEffort($, c, e.effort) : undefined
+    }
+    if (autoTarget && typeof e.effort === 'string' && autoTarget !== e.effort) {
+      return yield* next({ ...e, effort: autoTarget })
+    }
+    return yield* next(e)
+  })
 
   // After a call a mod may act on, pick up the card file its hook wrote.
   on('tool.call', async ($, e, next) => {
