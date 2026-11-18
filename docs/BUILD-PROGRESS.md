@@ -40,7 +40,7 @@ See API-NOTES section 15. 13 self-test cases. The card under the Agent row is dr
 - (done) 5 sub-agent router: PreToolUse matcher must be `Agent|Task` (`Task` in `-p`, `Agent` interactive). Uses `updatedInput.model` (sonnet/opus/haiku/fable) and SubagentStop `agent_transcript_path` for real usage. Show a card.
 - (done, see API-NOTES 16) 6 Input Router: PostToolUse `Read` + `updatedToolOutput` (not a deny). MCP via `updatedMCPToolOutput`. **Skip PDFs** (user decision). Honour `bypass_once` in session state (set by the card's "read full instead" button). Card with digest.
 - (done, see API-NOTES 17) 7 Effort Optimizer: suggest mode via UserPromptSubmit. The transcript `effort` field gives the current level. Levels include `xhigh`. Latency concern: heuristics first, Haiku if unclear, or a non-blocking shim toast. Auto mode only via shim `turn.step`.
-- 8 Final: `/mods doctor` all OK, CI workflow, README results (measured only), uninstall and reinstall check, private GitHub repo.
+- (done 2026-11-18 except the GitHub push, which waits for the user's OK) 8 Final: `/mods doctor` all OK, CI workflow, README results (measured only), uninstall and reinstall check, private GitHub repo.
 
 ## Gotchas learned
 - Doctor conflict scan: tests use `TOKEN_SAVER_CLAUDE_DIR={home}/...` and `TOKEN_SAVER_OUR_HOOKS_FILE`.
