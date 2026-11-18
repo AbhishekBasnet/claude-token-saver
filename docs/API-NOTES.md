@@ -137,3 +137,7 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 - ⚠️ In a `claude -p` session the sub-agent tool is listed as **`Task`**. In this interactive session it's **`Agent`**. The sub-agent router must match `Agent|Task`.
 - The transcript's assistant entries carry `message.usage` (real context size) and an `effort` field (`medium` here), which the Effort Optimizer can read.
 - Self-test engine and fixtures live in `plugins/token-saver/selftest/` (not `tests/fixtures/`), so Doctor can run them from an installed copy. `tests/run_selftest.py` wraps it for CI.
+
+## 10. UI decisions (user, 2026-11-18)
+- **No emoji anywhere.** All one-line messages use plain prefixes (`token-saver:`, `doctor:`), replacing the spec's 🩺 🔀 📦 ⚡ lines.
+- **Info card under the tool row.** When a mod acts on a tool call (Input Router on `Read`, sub-agent router on `Agent`/`Task`), the shim draws a small bordered card under that call's row via a `ui.render` hook on `{ component: 'ToolUse' }`, keeping the row (`await next(e)`). Data flow: the Python hook writes `cache/cards/<tool_use_id>.json` (mod, model, file, tokens before→after, ms, path). The shim reads it with `$.fs.read`, keyed by `e.requestId` (= tool_use_id). No card file means the shim draws nothing extra. Buttons: `show digest` (expands it) and `read full instead` (tells the next Read of that file to pass through). Shared card component built in step 1, used by each mod after that.

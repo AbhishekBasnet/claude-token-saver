@@ -7,7 +7,7 @@ from stlib import Case, register, read_json, read_jsonl
 # ---------------------------------------------------------------- foundation
 
 def _first_run(out, home, p):
-    if not out or "token-saver installed" not in out.get("systemMessage", ""):
+    if not out or "token-saver: installed" not in out.get("systemMessage", ""):
         return False, f"expected install message, got {out}"
     cfg = read_json(home, "config.json")
     if not cfg or cfg["handoff"]["threshold_tokens"] != 250000:
