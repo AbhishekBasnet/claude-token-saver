@@ -16,6 +16,10 @@ def handle(event, ctx):
     state["welcomed"] = True
     ts.save_state(state)
     ts.load_config()  # creates defaults on first run
+    if event.get("model"):          # the session's main model (sub-agent router's fallback)
+        sst = ts.session_state(event["session_id"])
+        sst["main_model"] = event["model"]
+        ts.save_session_state(event["session_id"], sst)
     if first:
         return {"systemMessage": "token-saver: installed. /mods lists the mods (available from step 1)."}
     return None

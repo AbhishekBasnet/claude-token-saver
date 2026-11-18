@@ -1,0 +1,1 @@
+{"session_id": "s-route", "transcript_path": "{home}/transcript.jsonl", "cwd": "/tmp/project-a", "hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": "toolu_route1", "tool_input": {"description": "find all API routes", "prompt": "Find every API route.", "subagent_type": "general-purpose", "model": "opus"}}

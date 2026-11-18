@@ -184,6 +184,10 @@ def _saved(r) -> int | None:
     return None
 
 
+def _usd(v: float) -> str:
+    return f"~${v:,.2f}" if v >= 0.005 else ("~$0.00" if v > 0 else "-")
+
+
 def _money(tokens: int | None) -> str:
     if not tokens:
         return "-"
@@ -221,8 +225,10 @@ def savings_cmd(args: list[str], session: str | None) -> str:
 
     per: dict[str, dict] = {}
     for r in sel:
-        m = per.setdefault(r.get("mod", "?"), {"events": 0, "saved": 0, "measured": False})
+        m = per.setdefault(r.get("mod", "?"), {"events": 0, "saved": 0, "measured": False, "usd": 0.0})
         m["events"] += 1
+        if isinstance(r.get("usd_saved_est"), (int, float)):
+            m["usd"] += r["usd_saved_est"]     # model routing: same tokens, cheaper model
         s = _saved(r)
         if s is not None:
             m["saved"] += s
@@ -230,13 +236,15 @@ def savings_cmd(args: list[str], session: str | None) -> str:
 
     lines = [f"Token Saver - {title}", ""]
     lines.append(f"  {'mod':18} {'events':>7} {'tokens saved':>14} {'est. $':>10}")
-    total = 0
+    total, total_usd = 0, 0.0
     for mod, m in sorted(per.items(), key=lambda kv: -kv[1]["saved"]):
         saved = f"{m['saved']:,}" if m["measured"] else "n/a"
-        lines.append(f"  {mod:18} {m['events']:>7} {saved:>14} {_money(m['saved']) if m['measured'] else '-':>10}")
+        usd = (m["saved"] / 1e6 * PRICES["opus"]["input"] if m["measured"] else 0.0) + m["usd"]
+        lines.append(f"  {mod:18} {m['events']:>7} {saved:>14} {_usd(usd):>10}")
         total += m["saved"]
+        total_usd += usd
     lines.append("  " + "-" * 52)
-    lines.append(f"  {'total':18} {'':>7} {total:>14,} {_money(total):>10}")
+    lines.append(f"  {'total':18} {'':>7} {total:>14,} {_usd(total_usd):>10}")
 
     top = sorted((r for r in sel if (_saved(r) or 0) > 0), key=lambda r: -_saved(r))[:5]
     if top:
@@ -248,6 +256,8 @@ def savings_cmd(args: list[str], session: str | None) -> str:
     if off_notes:
         lines += ["", "  note: " + "; ".join(off_notes) + " - their savings for this period are incomplete."]
     lines += ["", f"  Token counts are as logged by each mod (some are len/4 estimates).",
+              "  Sub-agent routing saves $, not tokens: its $ is the sub-agent's real usage priced",
+              "  at the main model minus at the routed model.",
               f"  $ = API-equivalent at Opus 5.5 input price (${PRICES['opus']['input']:.2f}/M, {PRICE_SOURCE});",
               "  on a subscription this is quota, not money. Estimates only."]
     return "\n".join(lines)

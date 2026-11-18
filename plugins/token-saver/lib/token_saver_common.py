@@ -20,7 +20,7 @@ INNER_ENV = "TOKEN_SAVER_INNER"
 DEFAULT_CONFIG = {
     "input_router": {"enabled": True, "threshold_tokens": 2000, "model": "haiku"},
     "effort_optimizer": {"enabled": True, "model": "sonnet", "mode": "suggest"},
-    "subagent_router": {"enabled": True, "allow_opus": True},
+    "subagent_router": {"enabled": True, "allow_opus": True, "classifier_model": "haiku"},
     "cache_clock": {"enabled": True, "ttl_minutes": 60, "keep_warm": False},
     "handoff": {"enabled": True, "threshold_tokens": 250000},
 }
@@ -366,6 +366,7 @@ def last_usage(tpath: str | None, max_bytes: int = 4_000_000) -> dict | None:
                     u = (d.get("message") or {}).get("usage")
                     if isinstance(u, dict):
                         return {"usage": u, "ts": d.get("timestamp"),
+                                "model": (d.get("message") or {}).get("model"),
                                 "context_tokens": u.get("input_tokens", 0) + u.get("cache_read_input_tokens", 0)
                                 + u.get("cache_creation_input_tokens", 0)}
                 tail = lines[0] if read < size else b""

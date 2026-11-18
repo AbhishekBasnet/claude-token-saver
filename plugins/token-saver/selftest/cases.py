@@ -627,3 +627,150 @@ register(
     Case("cache_clock", "keep-warm ping restarts the clock", "lib/ts_cli.py", None, _ping_restarts,
          args=["keepwarm-log", "s-handoff", '{"cache_read_input_tokens": 48000}'], setup=_ping_setup_ctx),
 )
+
+
+# ---------------------------------------------------------------- sub-agent router
+ROUTE = "hooks/subagent_route.py"
+
+
+def _main_transcript(model="claude-opus-5-5"):
+    def setup(home):
+        rows = [{"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": "go"}},
+                {"type": "assistant", "message": {"role": "assistant", "model": model, "content": [],
+                 "usage": {"input_tokens": 5, "cache_read_input_tokens": 40000, "cache_creation_input_tokens": 0,
+                           "output_tokens": 10}}}]
+        with open(os.path.join(home, "transcript.jsonl"), "w") as f:
+            for r in rows:
+                f.write(_json.dumps(r) + "\n")
+    return setup
+
+
+def _routed(model):
+    def check(out, home, p):
+        ui = (((out or {}).get("hookSpecificOutput") or {}).get("updatedInput") or {})
+        if ui.get("model") != model:
+            return False, f"expected model={model}, got {out}"
+        if not ui.get("prompt") or not ui.get("description"):
+            return False, "updatedInput dropped the original fields"
+        if (out.get("hookSpecificOutput") or {}).get("permissionDecision"):
+            return False, "must not make a permission decision"
+        card = read_json(home, "cache/cards/toolu_route1.json")
+        if not card or model not in card["lines"][0]:
+            return False, f"card missing or wrong: {card}"
+        return True, ""
+    return check
+
+
+def _untouched(out, home, p):
+    if out is not None:
+        return False, f"expected pass-through, got {out}"
+    if read_json(home, "cache/cards/toolu_route1.json"):
+        return False, "card written for an untouched call"
+    return True, ""
+
+
+def _route_off_setup(home):
+    _main_transcript()(home)
+    import token_saver_common as T
+    cfg = in_home(home, T.load_config)
+    cfg["subagent_router"]["enabled"] = False
+    in_home(home, T.save_config, cfg)
+
+
+def _no_opus_setup(home):
+    _main_transcript()(home)
+    import token_saver_common as T
+    cfg = in_home(home, T.load_config)
+    cfg["subagent_router"]["allow_opus"] = False
+    in_home(home, T.save_config, cfg)
+
+
+def _agent_run_setup(home):
+    """A routed call happened (session state), then the sub-agent ran on haiku."""
+    _main_transcript()(home)
+    run_script(home, ROUTE, "pre_agent_explore.json")
+    prompt = "Find every API route defined in this repo and list the files and handlers."
+    rows = [{"type": "user", "isSidechain": True, "message": {"role": "user", "content": prompt}}]
+    for i in range(3):
+        rows.append({"type": "assistant", "isSidechain": True, "message": {
+            "id": f"msg_{i}", "role": "assistant", "model": "claude-haiku-5-5", "content": [],
+            "usage": {"input_tokens": 100, "output_tokens": 1000, "cache_read_input_tokens": 50_000,
+                      "cache_creation_input_tokens": 10_000,
+                      "cache_creation": {"ephemeral_5m_input_tokens": 10_000, "ephemeral_1h_input_tokens": 0}}}})
+    rows.append(dict(rows[-1]))                       # same request id twice: counted once
+    with open(os.path.join(home, "agent.jsonl"), "w") as f:
+        for r in rows:
+            f.write(_json.dumps(r) + "\n")
+
+
+def _agent_logged(out, home, p):
+    rows = [r for r in read_jsonl(home, "savings.jsonl") if r.get("mod") == "subagent_router"]
+    if len(rows) != 1:
+        return False, f"expected one savings entry, got {rows}"
+    r = rows[0]
+    # 3 requests: in 300, out 3000, read 150k, write(5m) 30k
+    want_opus = (300 * 4 + 3000 * 20 + 150_000 * 0.20 + 30_000 * 4 * 1.25) / 1e6
+    want_haiku = (300 * 0.10 + 3000 * 0.50 + 150_000 * 0.01 + 30_000 * 0.10 * 1.25) / 1e6
+    if abs(r["usd_main_est"] - want_opus) > 1e-6 or abs(r["usd_actual_est"] - want_haiku) > 1e-6:
+        return False, f"cost mismatch: {r}"
+    if r["requests"] != 3 or r.get("tokens_before") is not None:
+        return False, f"requests or token fields wrong: {r}"
+    st = read_json(home, "sessions/s-route.json") or {}
+    if st.get("subagent_routes"):
+        return False, "route record not cleared after logging"
+    return True, ""
+
+
+def _savings_has_usd(out, home, p):
+    t = (out or {}).get("text", "")
+    if "subagent_router" not in t or "~$0.23" not in t or "n/a" not in t:
+        return False, f"/savings does not show the routed $: {t[:400]}"
+    return True, ""
+
+
+def _savings_usd_setup(home):
+    _agent_run_setup(home)
+    run_script(home, "hooks/subagent_stop.py", "subagent_stop.json")
+
+
+register(
+    Case("subagent_router", "exploration sub-agent -> haiku", ROUTE, "pre_agent_explore.json", _routed("haiku"),
+         setup=_main_transcript(), max_ms=400),
+    Case("subagent_router", "Task tool name (-p) -> haiku", ROUTE, "pre_task_explore.json", _routed("haiku"),
+         setup=_main_transcript()),
+    Case("subagent_router", "security review -> stays on opus", ROUTE, "pre_agent_security.json", _untouched,
+         setup=_main_transcript()),
+    Case("subagent_router", "explicit model -> untouched", ROUTE, "pre_agent_explicit.json", _untouched,
+         setup=_main_transcript()),
+    Case("subagent_router", "mod off -> default model", ROUTE, "pre_agent_explore.json", _untouched,
+         setup=_route_off_setup),
+    Case("subagent_router", "writing code -> sonnet", ROUTE, "pre_agent_code.json", _routed("sonnet"),
+         setup=_main_transcript()),
+    Case("subagent_router", "unclear -> haiku classifier decides", ROUTE, "pre_agent_unclear.json", _routed("sonnet"),
+         setup=_main_transcript(), env={"TOKEN_SAVER_STUB_REPLY": "sonnet"}),
+    Case("subagent_router", "classifier fails -> untouched", ROUTE, "pre_agent_unclear.json", _untouched,
+         setup=_main_transcript(), env={"TOKEN_SAVER_STUB_FAIL": "timeout"}),
+    Case("subagent_router", "main on sonnet: never routes up", ROUTE, "pre_agent_code.json", _untouched,
+         setup=_main_transcript("claude-sonnet-5-5")),
+    Case("subagent_router", "allow_opus off -> security capped at sonnet", ROUTE, "pre_agent_security.json",
+         _routed("sonnet"), setup=_no_opus_setup),
+    Case("subagent_router", "SubagentStop -> real usage, $ diff logged", "hooks/subagent_stop.py",
+         "subagent_stop.json", _agent_logged, setup=_agent_run_setup),
+    Case("subagent_router", "/savings shows routed $", "lib/ts_cli.py", None, _savings_has_usd,
+         args=["savings", "s-route", "all"], setup=_savings_usd_setup),
+)
+
+
+def _main_from_start_setup(home):
+    """No assistant reply in the transcript yet (first turn of a -p run): the
+    model SessionStart reported (sonnet) must be used, not the opus default."""
+    open(os.path.join(home, "transcript.jsonl"), "w").close()
+    os.makedirs(os.path.join(home, "sessions"), exist_ok=True)
+    with open(os.path.join(home, "sessions", "s-route.json"), "w") as f:
+        _json.dump({"main_model": "claude-sonnet-5-5"}, f)
+
+
+register(
+    Case("subagent_router", "no reply yet: main model from SessionStart", ROUTE, "pre_agent_code.json", _untouched,
+         setup=_main_from_start_setup, env={**EMPTY_CLAUDE}),
+)

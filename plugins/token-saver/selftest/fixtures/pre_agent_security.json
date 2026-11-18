@@ -1,0 +1,1 @@
+{"session_id": "s-route", "transcript_path": "{home}/transcript.jsonl", "cwd": "/tmp/project-a", "hook_event_name": "PreToolUse", "tool_name": "Agent", "tool_use_id": "toolu_route1", "tool_input": {"description": "security review of auth", "prompt": "Do a security review of the login and session handling code. Look for vulnerabilities.", "subagent_type": "general-purpose"}}

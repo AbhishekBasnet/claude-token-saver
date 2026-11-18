@@ -1,0 +1,1 @@
+{"session_id": "s-route", "transcript_path": "{home}/transcript.jsonl", "cwd": "/tmp/project-a", "hook_event_name": "PreToolUse", "tool_name": "Task", "tool_use_id": "toolu_route1", "tool_input": {"description": "find all API routes", "prompt": "Find every API route defined in this repo and list the files and handlers.", "subagent_type": "general-purpose"}}

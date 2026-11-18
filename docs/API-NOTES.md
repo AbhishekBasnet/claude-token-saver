@@ -168,3 +168,15 @@ Everything is possible. Changes: background calls use the flags above (no `--bar
 - Project slug = cwd with every non-alphanumeric character turned into `-`, which matches Claude Code's own `~/.claude/projects/<slug>` naming.
 - **Token accounting:** the doc measured **~2,350 real tokens** (fresh-session context 22,381 vs baseline 20,034). The len/4 estimate gave 1,138, about 2x low for markdown with paths and code. The saving is logged as old context minus (baseline + doc), where the baseline is the session's first-reply context. That keeps the system prompt and tools from counting as saved.
 - The test-run entries were removed from the real `savings.jsonl`.
+
+## 14. Verified in step 4: Cache Clock (2026-11-18)
+- The pinned line comes from `$.ui.status`, refreshed by `$.clock.every(30000)` (a hot reload stops the old timer). The context size comes live from `$.session.usage()`.
+- The reply's usage can reach the transcript **after** the Stop hook (and PreToolUse) fires. Readers poll up to 1 s.
+- Big transcripts: reading a 61 MB synthetic transcript took 0 ms (last usage, read backwards) and 8 ms (turn start, last 4 MB).
+
+## 15. Verified in step 5: sub-agent router (2026-11-18)
+- Classic `PreToolUse` with `hookSpecificOutput.updatedInput` and **no** permission decision rewrites the arguments and leaves the normal permission flow alone.
+- In `claude -p` 2.1.327 the sub-agent tool reported as `Agent` (it was `Task` in step 0). The matcher stays `Agent|Task`.
+- SessionStart in `-p` carries **no `model`** field (keys: cwd, hook_event_name, session_id, source, transcript_path). The main model comes from the transcript's latest reply (polled up to 1 s on the first turn), then from SessionStart's `model` when present, then from the settings `model`.
+- Live, with Sonnet as the main model: `updatedInput.model = "haiku"` made the sub-agent run on Haiku (its transcript's `message.model`). Three runs of "find all API routes" over a 3-file folder: 2-4 requests, 38k-74k input and 0.6k-1.8k output tokens. Est. cost $0.0021-$0.0032 on Haiku vs $0.040-$0.062 at Sonnet prices. Usage is summed per request id, because one request can span several transcript entries.
+- Prices (claude-api reference, cached 2026-11-03), per million tokens, input / output / cache read: Opus 5.5 $4 / $20 / $0.20, Sonnet 5.5 $2 / $10 / $0.10, Haiku 5.5 $0.10 / $0.50 / (not listed; 0.1x input = $0.01 assumed), Fable 5.2 $8 / $40 / $0.20. Cache writes cost 1.25x input (5 min TTL) or 2x input (1 h TTL).

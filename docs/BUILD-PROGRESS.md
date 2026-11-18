@@ -8,7 +8,7 @@ Written 2026-11-18 at the end of the first build session. This is the backup if 
 - Fedora 45 KDE, Claude subscription (no API key). Python stdlib only, and give a `dnf` command instead of installing anything. User scope install. Fail open.
 - **No emoji anywhere** in mod output. Use plain prefixes (`token-saver:`, `doctor:`, `handoff:`).
 - **README:** only numbers that were actually measured.
-- **Commits:** author is `Claude <noreply@anthropic.com>` (repo-local git config). Short one-line messages, **no `Co-Authored-By` line** (user, 2026-11-18, session 2; replaces the earlier rule).
+- **Commits:** author `Claude <noreply@anthropic.com>`, committer is the user (repo-local `user.name`/`user.email` = Abhishek / their hotmail). Commit with `git commit --author="Claude <noreply@anthropic.com>" -m "<short one-line message>"`. **No `Co-Authored-By` line.** All earlier commits were rewritten this way on 2026-11-18, before the first push (backup branch `backup-before-identity`).
 - **GitHub repo:** must be **private** (step 8).
 - **Info card:** when a mod acts on a tool call, show the card under that tool row (built in step 1; `write_card()` in Python, drawn by the shim).
 
@@ -33,8 +33,11 @@ Tests: `python3 tests/run_selftest.py` (38/38) and `claude plugin test plugins/t
   - Gotcha: the reply's usage can reach the transcript **after** Stop fires. `on_stop` polls up to 1 s.
 - The spec 03 savings formula needs the cache-read/input price ratio. For Opus 5.5 it's 0.20/4.00 = 0.05 (prices in `lib/switchboard.py`).
 
+## Step 5 (sub-agent router): done
+See API-NOTES section 15. 13 self-test cases. The card under the Agent row is drawn by the existing shim card path (not checked live: `-p` has no UI).
+
 ## Remaining steps
-- 5 sub-agent router: PreToolUse matcher must be `Agent|Task` (`Task` in `-p`, `Agent` interactive). Uses `updatedInput.model` (sonnet/opus/haiku/fable) and SubagentStop `agent_transcript_path` for real usage. Show a card.
+- (done) 5 sub-agent router: PreToolUse matcher must be `Agent|Task` (`Task` in `-p`, `Agent` interactive). Uses `updatedInput.model` (sonnet/opus/haiku/fable) and SubagentStop `agent_transcript_path` for real usage. Show a card.
 - 6 Input Router: PostToolUse `Read` + `updatedToolOutput` (not a deny). MCP via `updatedMCPToolOutput`. **Skip PDFs** (user decision). Honour `bypass_once` in session state (set by the card's "read full instead" button). Card with digest.
 - 7 Effort Optimizer: suggest mode via UserPromptSubmit. The transcript `effort` field gives the current level. Levels include `xhigh`. Latency concern: heuristics first, Haiku if unclear, or a non-blocking shim toast. Auto mode only via shim `turn.step`.
 - 8 Final: `/mods doctor` all OK, CI workflow, README results (measured only), uninstall and reinstall check, private GitHub repo.
